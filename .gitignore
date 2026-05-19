@@ -32,7 +32,6 @@ Thumbs.db
 # Environment
 .env
 *.log
-.cook/logs/
 
 # Notion sync state (contains Notion page IDs, session-specific)
 kb/.notion-sync.json

@@ -43,6 +43,14 @@ META_RE = re.compile(r"^>\s+\*\*(.+?)\*\*:\s*(.+?)\s*$")
 FRONTMATTER_BLOCK_RE = re.compile(r"^---\n(.*?)\n---\n?", re.DOTALL)
 WIKILINK_RE = re.compile(r"\[\[([^\]|#]+)(?:#[^\]|]+)?(?:\|[^\]]+)?\]\]")
 ARTIFACT_ID_RE = re.compile(r"^(?:CR|SR|H|E|F|L)\d{3}$")
+GOAL_REQUIRED_TERMS = {
+    "Codex command": ("/goal",),
+    "mission brief": ("challenge.md",),
+    "active state": ("active.md",),
+    "validator": ("kb_validate.py",),
+    "final evidence": ("final audit", "completion evidence", "confirmed findings"),
+    "blocked stop condition": ("blocked", "blocker", "budget-limited"),
+}
 
 
 @dataclass(frozen=True)
@@ -592,6 +600,30 @@ def validate_note(
     validate_backlinks(note, note_index, result)
 
 
+def validate_goal(kb_root: Path, result: ValidationResult) -> None:
+    goal_path = kb_root / "mission" / "GOAL.md"
+    if not goal_path.exists():
+        return
+
+    text = read_text(goal_path)
+    lower_text = text.lower()
+    for label, accepted_terms in GOAL_REQUIRED_TERMS.items():
+        if not any(term in lower_text for term in accepted_terms):
+            result.add(
+                "goal",
+                f"GOAL.md must mention {label} ({' or '.join(accepted_terms)}).",
+                goal_path,
+            )
+
+    command_lines = [line.strip() for line in text.splitlines() if line.strip().startswith("/goal")]
+    if not command_lines:
+        result.add(
+            "goal",
+            "GOAL.md must contain the exact Codex command on a line that starts with /goal.",
+            goal_path,
+        )
+
+
 def find_note_for_path(
     path: Path,
     kb_root: Path,
@@ -618,6 +650,11 @@ def find_note_for_path(
         return lessons.get(path.stem)
 
     return None
+
+
+def is_goal_path(path: Path, kb_root: Path) -> bool:
+    rel_path = safe_relative_to(path, kb_root)
+    return rel_path == Path("mission/GOAL.md")
 
 
 def format_text(result: ValidationResult) -> str:
@@ -656,6 +693,8 @@ def main() -> int:
             target_path = Path(args.check_file).resolve()
             if not target_path.exists():
                 result.add("filesystem", "File does not exist.", target_path)
+            elif is_goal_path(target_path, kb_root):
+                validate_goal(kb_root, result)
             else:
                 note = find_note_for_path(target_path, kb_root, special_notes, artifacts, lessons)
                 if note is None:
@@ -674,6 +713,7 @@ def main() -> int:
                 validate_note(special_notes["DASHBOARD"], artifacts, note_index, result)
             for artifact_id in sorted(artifacts):
                 validate_note(artifacts[artifact_id], artifacts, note_index, result)
+            validate_goal(kb_root, result)
 
     if args.format == "json":
         print(json.dumps(result.as_json(), indent=2))

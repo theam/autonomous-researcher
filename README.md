@@ -60,8 +60,8 @@ Open [Claude Code](https://docs.anthropic.com/en/docs/claude-code) or [Codex](ht
 ```text
 Install the Limina research skill by running:
 curl -fsSL https://raw.githubusercontent.com/theam/limina/main/setup.sh | bash
-Then ask me to change my Claude Code working directory to the folder where I want
-my research project to live, and help me set up a new Limina research project.
+Then ask me to switch to the folder where I want my research project to live,
+and help me set up a new Limina research project.
 ```
 
 The agent will install the skill, ask you to switch to your preferred directory, then guide you through everything — project name, research objective, context, success criteria.
@@ -72,7 +72,7 @@ When setup is done, open Claude Code in the new project directory:
 cd <your-project-name> && claude
 ```
 
-The agent reads the methodology automatically and starts researching.
+The agent reads the methodology automatically and starts researching. If you use Codex, open the generated project in Codex and send the `/goal` command from `kb/mission/GOAL.md`.
 
 ### What to expect
 
@@ -184,43 +184,19 @@ Limina works with Claude Code, Codex, and OpenCode. Claude Code loads `CLAUDE.md
 | Communicate status | Active session/chat | Active session/chat | Active session/chat |
 | Validate KB state | `python3 scripts/kb_validate.py` | `python3 scripts/kb_validate.py` | `python3 scripts/kb_validate.py` |
 
-## Autonomous execution with cook
+## Autonomous execution
 
-[cook](https://rjcorwin.github.io/cook/) is a universal orchestration CLI that handles work-review-gate cycles across any agent runtime. Use it when you want the agent to run fully autonomously with built-in review gates.
+Limina supports both Claude Code and Codex. The shared contract is the same in both runtimes: `kb/` is the durable project memory, `kb/ACTIVE.md` is the current state, and the active session is where milestones, blockers, and handoffs are communicated.
+
+Claude Code uses `CLAUDE.md`, the `.claude/` hooks, and the bundled skills to keep the research loop disciplined.
+
+Codex uses `AGENTS.md`. For long-running Codex sessions, Limina can generate a `/goal` command from the mission brief:
 
 ```bash
-npm install -g @let-it-cook/cli
+python3 scripts/generate_goal.py --write
 ```
 
-**Continue research (open-ended):**
-```bash
-cook "Continue research" review \
-     "Review current status and verify if we achieved the target mission" \
-     "DONE if we achieved the target mission, else ITERATE"
-```
-
-**Research with iteration cap:**
-```bash
-cook "Continue research" review \
-     "Review current status and verify if we achieved the target mission" \
-     "DONE if we achieved the target mission, else ITERATE" \
-     --max-iterations 10
-```
-
-**Mixed agents (Codex work, Claude review):**
-```bash
-cook "Continue research" review \
-     "Review current status and verify if we achieved the target mission" \
-     "DONE if we achieved the target mission, else ITERATE" \
-     --work-agent codex --review-agent claude
-```
-
-**Challenge review:**
-```bash
-cook "Run /challenge with target 'Research direction'" review \
-     "Read the CR report and assess whether critical issues were addressed" \
-     "DONE if no critical issues remain, else ITERATE"
-```
+Send the generated command from `kb/mission/GOAL.md` in a Codex thread. Codex should complete the Goal only after concrete evidence exists: updated active state, traceable `H -> E -> F` artifacts, a final audit, and a passing validator run.
 
 ## What you get
 
@@ -232,6 +208,7 @@ cook "Run /challenge with target 'Research direction'" review \
 - Installable companion skills for literature research, experiment rigor, adversarial review, and maintainable software work
 - Adapters for Claude Code, Codex, and OpenCode
 - Core artifact templates in `templates/`
+- Codex `/goal` generation from `kb/mission/CHALLENGE.md`
 - A KB validator: `python3 scripts/kb_validate.py`
 - Provenance and staleness tracking: `python3 scripts/kb_provenance.py`
 - Optional Obsidian vault integration: `bash scripts/obsidian_init.sh`

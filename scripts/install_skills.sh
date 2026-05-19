@@ -24,7 +24,7 @@ install_target() {
 
   mkdir -p "${target_dir}"
 
-  ln -sfn "${ROOT_DIR}/skill" "${target_dir}/limina"
+  install_symlink "${ROOT_DIR}/skill" "${target_dir}/limina"
   echo "Installed limina -> ${target_dir}/limina (${label})"
   installed=$((installed + 1))
 
@@ -32,7 +32,7 @@ install_target() {
     [[ -d "${skill_path}" ]] || continue
     local skill_name
     skill_name="$(basename "${skill_path}")"
-    ln -sfn "${skill_path}" "${target_dir}/${skill_name}"
+    install_symlink "${skill_path}" "${target_dir}/${skill_name}"
     echo "Installed ${skill_name} -> ${target_dir}/${skill_name} (${label})"
     installed=$((installed + 1))
   done
@@ -44,6 +44,18 @@ install_target() {
       --emitter install_skills \
       --property "count_total_installed=${installed}" >/dev/null 2>&1 || true
   fi
+}
+
+install_symlink() {
+  local source_path="$1"
+  local target_path="$2"
+
+  if [[ -e "${target_path}" && ! -L "${target_path}" ]]; then
+    echo "Replacing existing skill directory: ${target_path}"
+    rm -rf "${target_path}"
+  fi
+
+  ln -sfn "${source_path}" "${target_path}"
 }
 
 flush_telemetry() {

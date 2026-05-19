@@ -5,7 +5,7 @@ description: "Set up and launch an autonomous research project with Limina. Use 
 
 # Limina
 
-Limina is a small research-first agent template. It keeps durable evidence in `kb/` without dragging a large operational ledger into every session.
+Limina is a small research-first agent template for Claude Code and Codex. It keeps durable evidence in `kb/` without dragging a large operational ledger into every session. Codex projects also get a ready-to-send `/goal` command for long-running continuity.
 
 ## Workflow
 
@@ -15,7 +15,7 @@ Before asking setup questions, explain:
 
 > **What you're setting up:** an autonomous research project with a persistent knowledge base, a narrow active-state file, and a required `H -> E -> F` evidence flow.
 >
-> The agent can work across long sessions, but the always-on context stays small: mission brief, active state, and only the relevant artifacts for the current step.
+> The agent can work across long sessions, but the always-on context stays small: mission brief, active state, and only the relevant artifacts for the current step. Claude Code and Codex are both supported; Codex users also get a generated `/goal`.
 
 ### Step 2: Ask for a project name
 
@@ -42,6 +42,8 @@ Ask for:
 1. objective
 2. context or baseline
 3. success criteria
+4. resources and boundaries
+5. blocked stop condition
 
 Use concise examples and keep the prompt focused on the research problem, not on project administration.
 
@@ -69,11 +71,19 @@ type: mission
 
 <success criteria>
 
+## Resources & Boundaries
+
+<allowed resources, budget, data, tools, and off-limits areas>
+
 ## Constraints
 
 - Ask when blocked on access, trust in the evaluation, or strategic decisions.
 - Persist durable evidence in `kb/`.
 - Keep active state in `kb/ACTIVE.md`.
+
+## Blocked Stop Condition
+
+<when the agent should stop and ask for help>
 
 ## Links
 
@@ -108,14 +118,32 @@ None.
 - Mission: [[CHALLENGE]]
 ```
 
-### Step 7: Initial commit
+### Step 7: Generate the Codex Goal
+
+Run:
+
+```bash
+python3 scripts/generate_goal.py --write
+```
+
+If it fails, fix the missing `CHALLENGE.md` fields and run it again. The generated `kb/mission/GOAL.md` is optional for Claude Code and useful for Codex.
+
+### Step 8: Validate and commit
+
+Run:
+
+```bash
+python3 scripts/kb_validate.py
+```
+
+Then commit:
 
 ```bash
 git add -A
 git commit -m "Initialize Limina research project"
 ```
 
-### Step 8: Tell the user how to start
+### Step 9: Tell the user how to start
 
 Tell the user:
 
@@ -127,7 +155,7 @@ Tell the user:
 > cd <project-name> && claude
 > ```
 >
-> Or open the folder in Codex.
+> Or open the folder in Codex and send the `/goal` command from `kb/mission/GOAL.md`.
 >
 > The runtime loads the mission brief and active state at startup. Hooks enforce `H -> E -> F`, validate kb writes, and run a final kb validation before stop.
 >

@@ -44,11 +44,23 @@ Use this at the start of a session, after compaction, or whenever the current co
 
 1. Read `kb/mission/CHALLENGE.md`.
 2. Read `kb/ACTIVE.md`.
-3. Open only the linked artifacts needed to reconstruct the current working state. Do not browse unrelated notes until the active scope is clear.
-4. Reconstruct the current state before acting: current objective, next step, blocker, latest decisive evidence, and open decision.
-5. Cross-check key numbers, dates, baselines, and decisions across the artifacts you read. If they disagree, treat that inconsistency as a blocker until resolved.
-6. Search `kb/` before creating a new hypothesis, finding, or review.
-7. Only continue once the active scope and state are coherent.
+3. Read `kb/mission/GOAL.md` if a Codex Goal is active or the file exists.
+4. Open only the linked artifacts needed to reconstruct the current working state. Do not browse unrelated notes until the active scope is clear.
+5. Reconstruct the current state before acting: current objective, next step, blocker, latest decisive evidence, and open decision.
+6. Cross-check key numbers, dates, baselines, and decisions across the artifacts you read. If they disagree, treat that inconsistency as a blocker until resolved.
+7. Search `kb/` before creating a new hypothesis, finding, or review.
+8. Only continue once the active scope and state are coherent.
+
+## Codex Goal Protocol
+
+When a Codex `/goal` is active, treat it as the thread-level completion contract. `kb/` remains the durable project memory.
+
+- Use `kb/mission/CHALLENGE.md` for mission intent and `kb/ACTIVE.md` for current state.
+- Make concrete tool-backed progress when possible; do not only narrate.
+- Preserve the `H -> E -> F` evidence chain.
+- Update `kb/ACTIVE.md` before stopping, especially the next step and blocker.
+- Do not mark the Goal complete until `python3 scripts/kb_validate.py` passes and the final audit separates confirmed findings, proxy evidence, blocked claims, and remaining uncertainty.
+- If blocked or budget-limited, do not mark the Goal complete. Update `kb/ACTIVE.md` with the blocker and ask for the exact missing input, access, budget, or decision.
 
 ## Default Research Loop
 
