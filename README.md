@@ -18,6 +18,25 @@ Built by [The Agile Monkeys](https://theagilemonkeys.com).
 
 Give Limina a problem with a measurable goal. It will autonomously research it — forming hypotheses, running experiments, challenging its own direction — until it finds a solution backed by evidence, or tells you what it learned trying.
 
+## Quick start
+
+Open [Claude Code](https://docs.anthropic.com/en/docs/claude-code) or [Codex](https://openai.com/index/introducing-codex/) and paste:
+
+```text
+Install the Limina research skill by running:
+curl -fsSL https://raw.githubusercontent.com/theam/limina/main/setup.sh | bash
+Then ask me to switch to the folder where I want my research project to live,
+and help me set up a new Limina research project.
+```
+
+The agent will install the skill and guide you through the project name, research objective, context, and success criteria.
+
+When setup is done, open the new project in Claude Code or Codex and start the autonomous run:
+
+```text
+/goal Continue Limina research until the mission success criteria are satisfied
+```
+
 ## What is this
 
 Limina is an autonomous research harness for AI agents. You describe a problem with clear success criteria, and the agent works through it: break it down, survey existing approaches, form hypotheses, design and run experiments, challenge its own assumptions, and iterate — until it reaches a solution or exhausts the approaches and tells you what it learned.
@@ -53,28 +72,7 @@ This repository is a **template/starter system** — clone it, start an agent, a
 
 **Get the result.** When the agent meets your success criteria — or determines it can't — you have the solution, the full research trail, and the reasoning behind every decision it made along the way.
 
-## Quick start
-
-Open [Claude Code](https://docs.anthropic.com/en/docs/claude-code) or [Codex](https://openai.com/index/introducing-codex/) and paste:
-
-```text
-Install the Limina research skill by running:
-curl -fsSL https://raw.githubusercontent.com/theam/limina/main/setup.sh | bash
-Then ask me to switch to the folder where I want my research project to live,
-and help me set up a new Limina research project.
-```
-
-The agent will install the skill, ask you to switch to your preferred directory, then guide you through everything — project name, research objective, context, success criteria.
-
-When setup is done, open Claude Code in the new project directory:
-
-```bash
-cd <your-project-name> && claude
-```
-
-The agent reads the methodology automatically and starts researching. If you use Codex, open the generated project in Codex and send the `/goal` command from `kb/mission/GOAL.md`.
-
-### What to expect
+## What to expect
 
 As the agent works, it builds a knowledge base in `kb/`:
 
@@ -184,20 +182,6 @@ Limina works with Claude Code, Codex, and OpenCode. Claude Code loads `CLAUDE.md
 | Communicate status | Active session/chat | Active session/chat | Active session/chat |
 | Validate KB state | `python3 scripts/kb_validate.py` | `python3 scripts/kb_validate.py` | `python3 scripts/kb_validate.py` |
 
-## Autonomous execution
-
-Limina supports both Claude Code and Codex. The shared contract is the same in both runtimes: `kb/` is the durable project memory, `kb/ACTIVE.md` is the current state, and the active session is where milestones, blockers, and handoffs are communicated.
-
-Claude Code uses `CLAUDE.md`, the `.claude/` hooks, and the bundled skills to keep the research loop disciplined.
-
-Codex uses `AGENTS.md`. For long-running Codex sessions, Limina can generate a `/goal` command from the mission brief:
-
-```bash
-python3 scripts/generate_goal.py --write
-```
-
-Send the generated command from `kb/mission/GOAL.md` in a Codex thread. Codex should complete the Goal only after concrete evidence exists: updated active state, traceable `H -> E -> F` artifacts, a final audit, and a passing validator run.
-
 ## What you get
 
 - A persistent knowledge base in `kb/` with Obsidian-compatible YAML frontmatter
@@ -208,7 +192,7 @@ Send the generated command from `kb/mission/GOAL.md` in a Codex thread. Codex sh
 - Installable companion skills for literature research, experiment rigor, adversarial review, and maintainable software work
 - Adapters for Claude Code, Codex, and OpenCode
 - Core artifact templates in `templates/`
-- Codex `/goal` generation from `kb/mission/CHALLENGE.md`
+- Native `/goal` execution for long-running Claude Code and Codex sessions
 - A KB validator: `python3 scripts/kb_validate.py`
 - Provenance and staleness tracking: `python3 scripts/kb_provenance.py`
 - Optional Obsidian vault integration: `bash scripts/obsidian_init.sh`
