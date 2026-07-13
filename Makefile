@@ -1,6 +1,7 @@
 PYTHON ?= python3
+UV ?= uv
 
-.PHONY: validate test generate-goal install-skills check
+.PHONY: validate test generate-goal install-skills check runtime-sync runtime-test runtime-lint runtime-check runtime-schema-sql runtime-compose
 
 validate:
 	LIMINA_TELEMETRY_INTERNAL=1 $(PYTHON) scripts/kb_validate.py
@@ -15,3 +16,22 @@ install-skills:
 	bash scripts/install_skills.sh
 
 check: test validate
+
+runtime-sync:
+	$(UV) sync --extra codex
+
+runtime-test:
+	$(UV) run python -m unittest discover -s tests
+
+runtime-lint:
+	$(UV) run ruff format --check src migrations tests/test_cloud_*.py
+	$(UV) run ruff check src migrations tests/test_cloud_*.py
+
+runtime-schema-sql:
+	LIMINA_DATABASE_URL=postgresql+psycopg://limina:limina@localhost/limina $(UV) run alembic upgrade head --sql >/dev/null
+
+runtime-compose:
+	OPENAI_API_KEY=test LIMINA_API_TOKEN=test docker compose config >/dev/null
+	LIMINA_API_TOKEN=test docker compose -f compose.cloud.yaml config >/dev/null
+
+runtime-check: runtime-lint runtime-test runtime-schema-sql runtime-compose validate

@@ -1,0 +1,27 @@
+FROM python:3.13-slim AS runtime
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+COPY pyproject.toml README.md LICENSE ./
+COPY src ./src
+COPY alembic.ini ./
+COPY migrations ./migrations
+
+RUN pip install --no-cache-dir ".[codex]"
+
+RUN useradd --create-home --uid 10001 limina \
+    && mkdir -p /var/lib/limina/workspaces \
+    && chown -R limina:limina /var/lib/limina
+USER limina
+
+ENV LIMINA_DATABASE_URL=sqlite:////var/lib/limina/runtime.db \
+    LIMINA_WORKSPACE_ROOT=/var/lib/limina/workspaces \
+    LIMINA_SECRET_KEY_PATH=/var/lib/limina/secret.key
+
+EXPOSE 7433
+VOLUME ["/var/lib/limina"]
+
+CMD ["sh", "-c", "limina db upgrade && exec limina serve --host 0.0.0.0 --port 7433"]
