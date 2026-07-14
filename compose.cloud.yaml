@@ -34,6 +34,8 @@ services:
       LIMINA_CODEX_MODEL: ${LIMINA_CODEX_MODEL:-gpt-5.4}
       LIMINA_CODEX_SANDBOX: ${LIMINA_CODEX_SANDBOX:-workspace-write}
       LIMINA_CLAUDE_MODEL: ${LIMINA_CLAUDE_MODEL:-}
+      LIMINA_MCP_ALLOWED_HOSTS: ${LIMINA_MCP_ALLOWED_HOSTS:-127.0.0.1:*,localhost:*,[::1]:*}
+      LIMINA_MCP_ALLOWED_ORIGINS: ${LIMINA_MCP_ALLOWED_ORIGINS:-http://127.0.0.1:*,http://localhost:*,http://[::1]:*}
       LIMINA_SECRET_KEY: ${LIMINA_SECRET_KEY:-}
       LIMINA_SECRET_KEY_PATH: /var/lib/limina/secret.key
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}

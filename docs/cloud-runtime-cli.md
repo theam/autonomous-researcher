@@ -163,9 +163,16 @@ limina --json review retrieval | jq '.findings[] | {id, title}'
 `attach` is interactive and rejects `--json`; event consumers should use
 `watch --no-follow --json`.
 
+Services can use the same versioned REST contract directly, and collaborating agents can connect
+to the authenticated Streamable HTTP endpoint at `/mcp/`. Both interfaces call the same public
+project operations as the CLI. MCP exposes project management, steering, review, activity,
+variables, and read-only knowledge resources; secret values remain restricted to the trusted CLI
+or REST path so they do not enter an agent's model-visible tool arguments. See the root README for
+ready-to-use Codex and Claude Code connection examples.
+
 ## What users never operate
 
 Limina contains a hidden, project-scoped command protocol so either managed runtime can commit
-H → E → F artifacts safely. It is omitted from public help and OpenAPI, protected by a short-lived
-capability, and not part of the user workflow. If a human is managing sessions, threads, workers,
-subagents, leases, versions, or checkpoints, the abstraction has failed.
+H → E → F artifacts safely. It is omitted from public help, OpenAPI, and MCP, protected by a
+short-lived capability, and not part of the user workflow. If a human is managing sessions,
+threads, workers, subagents, leases, versions, or checkpoints, the abstraction has failed.

@@ -11,9 +11,10 @@ only Limina operates turns, sessions, subagents, checkpoints, leases, retries, a
 
 ```mermaid
 flowchart LR
-    Team["Team: mission, resources, review, steer"] --> CLI["Limina CLI"]
-    CLI --> API["Public project API + live WebSocket"]
-    API --> Supervisor["Limina project supervisor"]
+    Team["Team: mission, resources, review, steer"] --> Interface["CLI, REST, WebSocket, or MCP"]
+    Interface --> Operations["Shared project operations"]
+    Operations --> Supervisor["Limina project supervisor"]
+    Operations --> DB
     Supervisor --> Adapter{"Immutable project runtime"}
     Adapter --> Codex["Codex SDK adapter"]
     Adapter --> Claude["Claude Agent SDK adapter"]
@@ -39,9 +40,29 @@ The complete public contract is:
 5. give feedback, answer questions, approve decisions, and steer strategy;
 6. attach to a live project to watch and steer current work synchronously.
 
-The public OpenAPI schema and CLI expose no worker, session, thread, subagent, lease, checkpoint,
-version, or inbox-cursor controls. Provider session IDs are stored as private `continuation_id`
-state so the rest of Limina does not depend on either provider's terminology.
+The public OpenAPI schema, MCP tools/resources, and CLI expose no worker, session, thread,
+subagent, lease, checkpoint, version, or inbox-cursor controls. Provider session IDs are stored as
+private `continuation_id` state so the rest of Limina does not depend on either provider's
+terminology.
+
+## Public transport boundary
+
+REST is the canonical machine contract, the CLI is its human terminal client, WebSocket adds a
+live view, and MCP is an agent-native adapter. Both REST and MCP call one `ProjectOperations`
+layer, so lifecycle side effects, durable guidance, resource refreshes, public projections, and
+redaction rules cannot diverge by transport.
+
+The MCP endpoint uses stateless Streamable HTTP at `/mcp/`. It carries the same instance bearer
+token and accepts `X-Limina-Actor` for attributed team mutations. MCP JSON-RPC request identity is
+not treated as a permanent idempotency namespace; tools accept an optional stable idempotency key,
+and otherwise generate a command ID. Read-only MCP resources project lists, status,
+reviews, H/E/F knowledge, and deterministic Markdown snapshots.
+
+Secret values are intentionally absent from MCP tools because their arguments normally enter a
+model context or transcript. A trusted CLI or direct REST client may set encrypted, write-only
+secrets; MCP can inspect redacted secret metadata and revoke a secret by name. DNS-rebinding
+protection accepts local hosts by default and requires an explicit host/origin allowlist for a
+remote deployment.
 
 ## Engine boundary
 
@@ -189,8 +210,8 @@ stateDiagram-v2
     COMPLETE --> ARCHIVED: archive
 ```
 
-The API lifespan starts the supervisor. Startup scans `RUNNING` and `WAITING` projects and
-reconstructs their loops. A turn:
+The server lifespan starts the MCP request manager and the project supervisor. Startup scans
+`RUNNING` and `WAITING` projects and reconstructs their loops. A turn:
 
 1. acquires and renews the project coordinator lease;
 2. snapshots mission, state, resources, and pending guidance;
@@ -244,7 +265,7 @@ secret manager, and per-project container or microVM isolation.
 | Runtime and domain | Python 3.11+, typed service layer |
 | Codex | Official `openai-codex` Python SDK |
 | Claude Code | Official `claude-agent-sdk` Python SDK with bundled CLI |
-| Public control/live transport | FastAPI HTTP + WebSocket |
+| Public control/live transport | FastAPI REST + WebSocket; official MCP Python SDK for Streamable HTTP |
 | CLI | Typer, Rich, `websockets` |
 | Canonical persistence | PostgreSQL + SQLAlchemy 2 |
 | Schema evolution | Alembic |

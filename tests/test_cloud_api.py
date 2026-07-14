@@ -108,6 +108,7 @@ class CloudApiTests(unittest.TestCase):
         self.assertEqual(response.json()["runtimes"], ["codex", "claude-code"])
 
         schema = self.client.get("/openapi.json", headers=self.auth).json()
+        self.assertIn("HTTPBearer", schema["components"]["securitySchemes"])
         paths = " ".join(schema["paths"])
         for forbidden in ("worker", "thread", "session", "coordinator", "lease"):
             self.assertNotIn(forbidden, paths)

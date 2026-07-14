@@ -7,6 +7,7 @@
 | Limina owns execution | API lifespan recovers active projects; supervisor selects and owns SDK sessions | supervisor ownership and lifecycle tests |
 | Codex and Claude Code are selectable | immutable runtime column plus validated public `runtime` field | service, API, CLI, migration tests |
 | Users do not manage provider machinery | public CLI/OpenAPI expose project concepts; serializers remove private state | public-surface and sanitized-status tests |
+| Agents use the same public boundary | authenticated MCP tools/resources call the shared project operation layer | MCP discovery, cross-transport, attribution, and resource tests |
 | Synchronous steering works | Codex steers in-turn; Claude interrupts then redirects the same session | adapter, supervisor, and WebSocket tests |
 | Asynchronous steering survives disconnects | inbox write precedes live delivery and remains pending until checkpoint | durable inbox/checkpoint tests |
 | A new process can resume | provider continuation is persisted before/while managed work starts | supervisor and both adapter tests |
@@ -38,6 +39,27 @@ OPENAI_API_KEY=test ANTHROPIC_API_KEY=test LIMINA_API_TOKEN=acceptance-test-toke
 
 `make runtime-check` runs those mechanical checks. Building `Dockerfile.cloud` is a separate
 acceptance step when a Docker daemon is available.
+
+### API and MCP packaged smoke — 2026-07-14
+
+`Dockerfile.cloud` was rebuilt with the direct `mcp` dependency and started as an unprivileged
+container on a clean SQLite store. The published server reported:
+
+```json
+{
+  "ok": true,
+  "runtime_owner": "limina",
+  "runtimes": ["codex", "claude-code"],
+  "interfaces": {"rest": "/v1", "mcp": "/mcp/"}
+}
+```
+
+An authenticated MCP `initialize` negotiated protocol `2025-06-18`. A subsequent
+`limina_create_project` tool call, attributed with `X-Limina-Actor`, returned structured project
+content with `isError=false`. A REST read then returned the same `mcp-smoke` project and durable
+timestamps from the canonical store. This proves the packaged process, mounted Streamable HTTP
+transport, authentication middleware, MCP tool dispatch, shared operation layer, and REST/MCP
+state convergence without invoking either paid provider runtime.
 
 ## Codex adapter evidence
 
@@ -160,6 +182,7 @@ does not replace the live Anthropic execution smoke described above.
   proposed checkpoint.
 - **Two replicas recover one project:** only one obtains the coordinator lease.
 - **Lost HTTP response:** idempotency receipts return the original database result.
+- **MCP retry:** callers may supply the same durable idempotency key; no provider session is exposed.
 - **Lost WebSocket:** guidance and events remain durable; reconnect replays them.
 - **Missing live turn:** feedback remains queued.
 - **Concurrent artifacts:** per-kind atomic counters allocate unique IDs.
@@ -184,6 +207,8 @@ does not replace the live Anthropic execution smoke described above.
    test against managed PostgreSQL.
 10. The generated local encryption key favors one-command operation. Replicas need a shared key
     from a secrets manager, and backups need separate key escrow.
+11. MCP intentionally omits secret-value writes; automation that provisions secrets must use the
+    trusted CLI or REST API. Remote hostnames must be added to the MCP DNS-rebinding allowlist.
 
 These limits do not change runtime ownership. A scheduler, sandbox manager, or notification service
 must remain an internal Limina concern rather than exposing provider session management to users.

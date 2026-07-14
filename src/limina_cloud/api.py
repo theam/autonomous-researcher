@@ -7,11 +7,13 @@ import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
+from secrets import compare_digest
 from typing import Annotated, Any, Literal
 from uuid import uuid4
 
 from fastapi import Depends, FastAPI, Header, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
 from . import __version__
@@ -19,6 +21,14 @@ from .database import Database
 from .engines import SUPPORTED_RUNTIME_ENGINES
 from .errors import AuthenticationError, InvariantError, LiminaError
 from .exporter import MarkdownExporter
+from .mcp import create_mcp_server
+from .operations import (
+    ACTOR_LIMIT,
+    PUBLIC_COMMAND_ID_LIMIT,
+    ProjectOperations,
+    public_event,
+    public_status,
+)
 from .runtime import AgentFactory, ProjectSupervisor
 from .service import ChallengeService
 from .vault import SecretCipher
@@ -125,109 +135,7 @@ class RuntimeContext:
             agent_factory=agent_factory,
             poll_interval=poll_interval,
         )
-
-
-def _public_project(project: dict[str, Any]) -> dict[str, Any]:
-    coordinator = project["coordinator"]
-    return {
-        "slug": project["slug"],
-        "name": project["name"],
-        "mission": project["objective"],
-        "success_criteria": project["success_criteria"],
-        "context": project["context"],
-        "runtime": project["runtime_engine"],
-        "status": "ARCHIVED" if project["status"] == "ARCHIVED" else coordinator["status"],
-        "current_objective": coordinator["current_objective"],
-        "next_step": coordinator["next_step"],
-        "blocker": coordinator["blocker"],
-        "created_at": project["created_at"],
-        "updated_at": coordinator["updated_at"],
-    }
-
-
-def _public_status(status: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "project": _public_project(status["challenge"]),
-        "knowledge": status["counts"],
-        "active_work": [_public_artifact(item) for item in status["running_experiments"]],
-        "pending_guidance": status["pending_inbox"],
-        "event_cursor": status["last_event_sequence"],
-    }
-
-
-def _public_artifact(artifact: dict[str, Any]) -> dict[str, Any]:
-    result = {
-        "id": artifact["id"],
-        "kind": artifact["kind"],
-        "title": artifact["title"],
-        "status": artifact["status"],
-        "content": artifact["payload"],
-        "hypothesis_id": artifact.get("hypothesis_id"),
-        "experiment_id": artifact.get("experiment_id"),
-        "created_at": artifact["created_at"],
-        "updated_at": artifact["updated_at"],
-    }
-    if "observations" in artifact:
-        result["observations"] = artifact["observations"]
-    return result
-
-
-def _public_resource(resource: dict[str, Any]) -> dict[str, Any]:
-    result = {
-        "name": resource["name"],
-        "type": resource["type"],
-        "status": resource["status"],
-        "created_at": resource["created_at"],
-        "updated_at": resource["updated_at"],
-    }
-    if resource["type"] == "VARIABLE":
-        result["value"] = resource["value"]
-    else:
-        result["configured"] = resource["configured"]
-    return result
-
-
-def _public_event(event: dict[str, Any]) -> dict[str, Any] | None:
-    event_type = event["type"]
-    if event_type in {"coordinator.claimed", "coordinator.released"}:
-        return None
-    aliases = {
-        "challenge.created": "project.created",
-        "coordinator.checkpointed": "project.checkpoint",
-        "inbox.message_sent": "guidance.received",
-        "inbox.message_acknowledged": "guidance.incorporated",
-    }
-    payload = {
-        key: value
-        for key, value in event["payload"].items()
-        if key
-        not in {
-            "worker_id",
-            "thread_id",
-            "continuation_id",
-            "turn_id",
-            "version",
-            "expires_at",
-            "message_id",
-        }
-    }
-    actor = event["actor"]
-    if actor.startswith("limina:"):
-        actor = "Limina"
-    if event_type == "challenge.created" and "runtime_engine" in payload:
-        payload["runtime"] = payload.pop("runtime_engine")
-    if event_type in {"runtime.codex", "runtime.claude-code"} and "limina _agent" in str(
-        payload.get("summary", "")
-    ):
-        payload["summary"] = "Updating durable project knowledge"
-    return {
-        "sequence": event["sequence"],
-        "type": aliases.get(event_type, event_type),
-        "actor": actor,
-        "artifact_id": event.get("artifact_id"),
-        "detail": payload,
-        "created_at": event["created_at"],
-    }
+        self.operations = ProjectOperations(self.service, self.exporter, self.supervisor)
 
 
 def create_app(
@@ -239,6 +147,8 @@ def create_app(
     poll_interval: float = 1.0,
     internal_url: str | None = None,
     secret_key_path: Path | None = None,
+    mcp_allowed_hosts: list[str] | None = None,
+    mcp_allowed_origins: list[str] | None = None,
 ) -> FastAPI:
     database = Database(database_url)
     database.initialize()
@@ -257,14 +167,28 @@ def create_app(
         internal_url=internal_url or os.environ.get("LIMINA_INTERNAL_URL", "http://127.0.0.1:7433"),
         secret_key_path=resolved_key_path,
     )
+    allowed_hosts = mcp_allowed_hosts or os.environ.get(
+        "LIMINA_MCP_ALLOWED_HOSTS", "127.0.0.1:*,localhost:*,[::1]:*"
+    ).split(",")
+    allowed_origins = mcp_allowed_origins or os.environ.get(
+        "LIMINA_MCP_ALLOWED_ORIGINS",
+        "http://127.0.0.1:*,http://localhost:*,http://[::1]:*",
+    ).split(",")
+    mcp_server, mcp_app = create_mcp_server(
+        runtime.operations,
+        token=runtime.token,
+        allowed_hosts=[item.strip() for item in allowed_hosts if item.strip()],
+        allowed_origins=[item.strip() for item in allowed_origins if item.strip()],
+    )
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
-        await runtime.supervisor.recover()
-        try:
-            yield
-        finally:
-            await runtime.supervisor.shutdown()
+        async with mcp_server.session_manager.run():
+            await runtime.supervisor.recover()
+            try:
+                yield
+            finally:
+                await runtime.supervisor.shutdown()
 
     app = FastAPI(
         title="Limina Project Runtime",
@@ -275,6 +199,10 @@ def create_app(
         lifespan=lifespan,
     )
     app.state.runtime = runtime
+    app.state.mcp = mcp_server
+    app.mount("/mcp", mcp_app, name="mcp")
+    bearer = HTTPBearer(auto_error=False)
+    bearer_dependency = Depends(bearer)
 
     @app.exception_handler(LiminaError)
     async def handle_limina_error(_request: Request, exc: LiminaError) -> JSONResponse:
@@ -283,13 +211,17 @@ def create_app(
             content={"error": {"code": exc.code, "message": exc.message, "details": exc.details}},
         )
 
-    def require_auth(authorization: Annotated[str | None, Header()] = None) -> None:
-        if runtime.token is not None and authorization != f"Bearer {runtime.token}":
+    def require_auth(
+        credentials: HTTPAuthorizationCredentials | None = bearer_dependency,
+    ) -> None:
+        if runtime.token is not None and (
+            credentials is None or not compare_digest(credentials.credentials, runtime.token)
+        ):
             raise AuthenticationError()
 
     def command_headers(
-        x_limina_actor: Annotated[str, Header(min_length=1)],
-        idempotency_key: Annotated[str, Header(min_length=1)],
+        x_limina_actor: Annotated[str, Header(min_length=1, max_length=ACTOR_LIMIT)],
+        idempotency_key: Annotated[str, Header(min_length=1, max_length=PUBLIC_COMMAND_ID_LIMIT)],
     ) -> tuple[str, str]:
         return x_limina_actor, idempotency_key
 
@@ -306,24 +238,9 @@ def create_app(
         )
 
     def internal_command_id(
-        idempotency_key: Annotated[str, Header(min_length=1)],
+        idempotency_key: Annotated[str, Header(min_length=1, max_length=64)],
     ) -> str:
         return idempotency_key
-
-    async def apply_lifecycle(
-        slug: str, action: str, actor: str, command_id: str
-    ) -> dict[str, Any]:
-        project = runtime.service.change_project_state(
-            slug=slug,
-            action=action,
-            actor=actor,
-            command_id=command_id,
-        )
-        if action in {"start", "resume"}:
-            await runtime.supervisor.ensure_running(slug)
-        elif action in {"pause", "stop", "archive"}:
-            await runtime.supervisor.stop_runtime(slug)
-        return _public_project(project)
 
     @app.get("/healthz")
     def health(_auth: None = Depends(require_auth)) -> dict[str, Any]:
@@ -332,6 +249,7 @@ def create_app(
             "version": __version__,
             "runtime_owner": "limina",
             "runtimes": list(SUPPORTED_RUNTIME_ENGINES),
+            "interfaces": {"rest": "/v1", "mcp": "/mcp/"},
         }
 
     @app.post("/v1/projects", status_code=201)
@@ -341,33 +259,31 @@ def create_app(
         _auth: None = Depends(require_auth),
     ) -> dict[str, Any]:
         actor, command_id = headers
-        values = body.model_dump()
-        runtime_engine = values.pop("runtime")
-        project = runtime.service.create_challenge(
-            **values,
-            runtime_engine=runtime_engine,
+        return runtime.operations.create_project(
+            slug=body.slug,
+            name=body.name,
+            mission=body.objective,
+            success_criteria=body.success_criteria,
+            context=body.context,
+            runtime=body.runtime,
             actor=actor,
             command_id=command_id,
         )
-        return _public_project(project)
 
     @app.get("/v1/projects")
     def list_projects(
         _auth: None = Depends(require_auth),
         include_archived: bool = Query(default=False),
     ) -> list[dict[str, Any]]:
-        return [
-            _public_project(project)
-            for project in runtime.service.list_projects(include_archived=include_archived)
-        ]
+        return runtime.operations.list_projects(include_archived=include_archived)
 
     @app.get("/v1/projects/{slug}")
     def get_project(slug: str, _auth: None = Depends(require_auth)) -> dict[str, Any]:
-        return _public_project(runtime.service.get_challenge(slug))
+        return runtime.operations.get_project(slug)
 
     @app.get("/v1/projects/{slug}/status")
     def project_status(slug: str, _auth: None = Depends(require_auth)) -> dict[str, Any]:
-        return _public_status(runtime.service.status(slug))
+        return runtime.operations.get_status(slug)
 
     @app.post("/v1/projects/{slug}/actions/{action}")
     async def project_action(
@@ -377,7 +293,9 @@ def create_app(
         _auth: None = Depends(require_auth),
     ) -> dict[str, Any]:
         actor, command_id = headers
-        return await apply_lifecycle(slug, action, actor, command_id)
+        return await runtime.operations.apply_lifecycle(
+            slug=slug, action=action, actor=actor, command_id=command_id
+        )
 
     @app.post("/v1/projects/{slug}/steering", status_code=202)
     async def steer_project(
@@ -387,43 +305,23 @@ def create_app(
         _auth: None = Depends(require_auth),
     ) -> dict[str, Any]:
         actor, command_id = headers
-        if body.kind.upper() == "INTERRUPT":
-            result = await runtime.supervisor.interrupt(slug, actor=actor, reason=body.body)
-        else:
-            result = await runtime.supervisor.submit_message(
-                slug=slug,
-                body=body.body,
-                kind=body.kind,
-                actor=actor,
-                command_id=command_id,
-            )
-        message = result["message"]
-        return {
-            "delivery": result["delivery"],
-            "kind": message["kind"],
-            "accepted_at": message["created_at"],
-        }
+        return await runtime.operations.steer(
+            slug=slug,
+            body=body.body,
+            kind=body.kind,
+            actor=actor,
+            command_id=command_id,
+        )
 
     @app.get("/v1/projects/{slug}/review")
     def review_project(slug: str, _auth: None = Depends(require_auth)) -> dict[str, Any]:
-        status = runtime.service.status(slug)
-        artifacts = runtime.service.list_artifacts(slug)
-        events = runtime.service.events(slug, after=0, limit=1000)
-        public_events = [item for event in events if (item := _public_event(event)) is not None]
-        return {
-            **_public_status(status),
-            "resources": [_public_resource(item) for item in runtime.service.list_resources(slug)],
-            "hypotheses": [_public_artifact(item) for item in artifacts if item["kind"] == "H"],
-            "experiments": [_public_artifact(item) for item in artifacts if item["kind"] == "E"],
-            "findings": [_public_artifact(item) for item in artifacts if item["kind"] == "F"],
-            "recent_activity": public_events[-50:],
-        }
+        return runtime.operations.review(slug)
 
     @app.get("/v1/projects/{slug}/knowledge/{artifact_id}")
     def get_knowledge(
         slug: str, artifact_id: str, _auth: None = Depends(require_auth)
     ) -> dict[str, Any]:
-        return _public_artifact(runtime.service.get_artifact(slug, artifact_id))
+        return runtime.operations.get_knowledge(slug, artifact_id)
 
     @app.get("/v1/projects/{slug}/events")
     def project_events(
@@ -432,13 +330,11 @@ def create_app(
         after: int = Query(default=0, ge=0),
         limit: int = Query(default=200, ge=1, le=1000),
     ) -> dict[str, Any]:
-        events = runtime.service.events(slug, after=after, limit=limit)
-        public = [item for event in events if (item := _public_event(event)) is not None]
-        return {"events": public, "cursor": events[-1]["sequence"] if events else after}
+        return runtime.operations.activity(slug, after=after, limit=limit)
 
     @app.get("/v1/projects/{slug}/snapshot")
     def snapshot(slug: str, _auth: None = Depends(require_auth)) -> dict[str, Any]:
-        return {"files": runtime.exporter.snapshot(slug)}
+        return runtime.operations.snapshot(slug)
 
     @app.put("/v1/projects/{slug}/resources/variables/{name}")
     async def set_variable(
@@ -449,26 +345,13 @@ def create_app(
         _auth: None = Depends(require_auth),
     ) -> dict[str, Any]:
         actor, command_id = headers
-        resource = runtime.service.set_variable(
+        return await runtime.operations.set_variable(
             slug=slug,
             name=name,
             value=body.value,
             actor=actor,
             command_id=command_id,
         )
-        await runtime.supervisor.submit_message(
-            slug=slug,
-            body=f"Project variable '{resource['name']}' was set.",
-            kind="ANSWER",
-            actor=actor,
-            command_id=f"{command_id}:resource",
-            live_delivery=False,
-        )
-        await runtime.supervisor.refresh_resources(slug)
-        project = runtime.service.get_challenge(slug)
-        if project["coordinator"]["status"] in {"RUNNING", "WAITING"}:
-            await runtime.supervisor.ensure_running(slug)
-        return _public_resource(resource)
 
     @app.put("/v1/projects/{slug}/resources/secrets/{name}")
     async def set_secret(
@@ -479,30 +362,17 @@ def create_app(
         _auth: None = Depends(require_auth),
     ) -> dict[str, Any]:
         actor, command_id = headers
-        resource = runtime.service.set_secret(
+        return await runtime.operations.set_secret(
             slug=slug,
             name=name,
             value=body.value.get_secret_value(),
             actor=actor,
             command_id=command_id,
         )
-        await runtime.supervisor.submit_message(
-            slug=slug,
-            body=f"Project secret '{resource['name']}' was set.",
-            kind="ANSWER",
-            actor=actor,
-            command_id=f"{command_id}:resource",
-            live_delivery=False,
-        )
-        await runtime.supervisor.refresh_resources(slug)
-        project = runtime.service.get_challenge(slug)
-        if project["coordinator"]["status"] in {"RUNNING", "WAITING"}:
-            await runtime.supervisor.ensure_running(slug)
-        return _public_resource(resource)
 
     @app.get("/v1/projects/{slug}/resources")
     def list_resources(slug: str, _auth: None = Depends(require_auth)) -> list[dict[str, Any]]:
-        return [_public_resource(item) for item in runtime.service.list_resources(slug)]
+        return runtime.operations.list_resources(slug)
 
     @app.delete("/v1/projects/{slug}/resources/{name}")
     async def remove_resource(
@@ -512,25 +382,12 @@ def create_app(
         _auth: None = Depends(require_auth),
     ) -> dict[str, Any]:
         actor, command_id = headers
-        resource = runtime.service.remove_resource(
+        return await runtime.operations.remove_resource(
             slug=slug,
             name=name,
             actor=actor,
             command_id=command_id,
         )
-        await runtime.supervisor.submit_message(
-            slug=slug,
-            body=f"Resource '{resource['name']}' has been revoked.",
-            kind="STEER",
-            actor=actor,
-            command_id=f"{command_id}:resource",
-            live_delivery=False,
-        )
-        await runtime.supervisor.refresh_resources(slug)
-        project = runtime.service.get_challenge(slug)
-        if project["coordinator"]["status"] in {"RUNNING", "WAITING"}:
-            await runtime.supervisor.ensure_running(slug)
-        return _public_resource(resource)
 
     @app.websocket("/v1/projects/{slug}/live")
     async def project_live(websocket: WebSocket, slug: str) -> None:
@@ -539,8 +396,11 @@ def create_app(
             await websocket.close(code=4401, reason="Authentication required")
             return
         actor = websocket.headers.get("x-limina-actor", "anonymous")
+        if len(actor) > ACTOR_LIMIT:
+            await websocket.close(code=4400, reason="Actor identity is too long")
+            return
         try:
-            initial = _public_status(runtime.service.status(slug))
+            initial = public_status(runtime.service.status(slug))
         except LiminaError as exc:
             await websocket.close(code=4404, reason=exc.message[:120])
             return
@@ -556,7 +416,7 @@ def create_app(
                 raw_events = runtime.service.events(slug, after=cursor, limit=200)
                 for raw_event in raw_events:
                     cursor = raw_event["sequence"]
-                    event = _public_event(raw_event)
+                    event = public_event(raw_event)
                     if event is not None:
                         await websocket.send_json({"type": "event", "value": event})
                 try:
@@ -584,7 +444,12 @@ def create_app(
                     await websocket.send_json({"type": "delivery", "value": delivery["delivery"]})
                 elif message_type == "action":
                     action = str(message.get("action", "")).lower()
-                    state = await apply_lifecycle(slug, action, actor, str(uuid4()))
+                    state = await runtime.operations.apply_lifecycle(
+                        slug=slug,
+                        action=action,
+                        actor=actor,
+                        command_id=str(uuid4()),
+                    )
                     await websocket.send_json({"type": "state", "value": state})
                 else:
                     raise InvariantError(

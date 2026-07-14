@@ -3,6 +3,7 @@ alembic>=1.16,<2
 cryptography>=45,<47
 fastapi>=0.116,<1
 httpx>=0.28,<1
+mcp>=1.28,<2
 psycopg[binary]>=3.2,<4
 rich>=13.9,<15
 sqlalchemy>=2.0,<3

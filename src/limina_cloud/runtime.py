@@ -760,12 +760,20 @@ class ProjectSupervisor:
         self._wake_for(slug).set()
         return interrupted
 
-    async def interrupt(self, slug: str, *, actor: str, reason: str) -> dict[str, Any]:
+    async def interrupt(
+        self,
+        slug: str,
+        *,
+        actor: str,
+        reason: str,
+        command_id: str | None = None,
+    ) -> dict[str, Any]:
         delivery = await self.submit_message(
             slug=slug,
             body=reason,
             kind="INTERRUPT",
             actor=actor,
+            command_id=command_id,
         )
         project = self.service.get_challenge(slug)
         if project["coordinator"]["status"] in {"RUNNING", "WAITING"}:
@@ -773,7 +781,7 @@ class ProjectSupervisor:
                 slug=slug,
                 action="pause",
                 actor=actor,
-                command_id=str(uuid4()),
+                command_id=f"{command_id}:pause" if command_id else str(uuid4()),
             )
         return delivery
 

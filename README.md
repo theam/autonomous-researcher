@@ -13,8 +13,9 @@
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![GitHub stars](https://img.shields.io/github/stars/theam/limina)](https://github.com/theam/limina/stargazers)
 
-Limina is a collaborative CLI runtime for long-running, evidence-driven work. Each project runs
-on a Limina-managed **Codex** or **Claude Code** engine.
+Limina is a collaborative managed runtime for long-running, evidence-driven work. Humans use its
+CLI, services use its REST API, and collaborating agents use its MCP server. Each project runs on
+a Limina-managed **Codex** or **Claude Code** engine.
 
 Your team operates projects: provide missions and resources, review accepted knowledge, and steer
 strategy. Limina operates everything below that boundary: model sessions, turns, subagents,
@@ -22,13 +23,13 @@ workspaces, retries, leases, checkpoints, and restart recovery.
 
 ## Quick start
 
-You need Docker and [`uv`](https://docs.astral.sh/uv/) for the host CLI. Add the credential for
-each engine you intend to use:
+You need Docker to run the server and [`uv`](https://docs.astral.sh/uv/) if you want the host CLI.
+Add the credential for each engine you intend to use:
 
 ```bash
 git clone https://github.com/theam/limina.git
 cd limina
-uv tool install .
+uv tool install .  # optional for API/MCP-only use
 
 cat > .env <<'ENV'
 LIMINA_API_TOKEN=replace-with-a-long-random-value
@@ -57,6 +58,70 @@ limina doctor
 
 `LIMINA_URL` defaults to `http://127.0.0.1:7433`. `doctor` confirms connectivity and reports the
 available engines.
+
+## Use the API or MCP
+
+The same server also exposes a versioned REST API and a Streamable HTTP MCP server. These are not
+separate runtimes: CLI, REST, WebSocket, and MCP all call the same project operations and observe
+the same database, event sequence, managed execution loop, and knowledge graph.
+
+Use REST for services and automation. The OpenAPI document is available at `/openapi.json`, with
+an interactive explorer at `/docs`. Every project request uses the instance bearer token.
+Mutations also carry an actor for team attribution and an idempotency key for safe retries:
+
+```bash
+curl -X POST http://127.0.0.1:7433/v1/projects \
+  -H "Authorization: Bearer $LIMINA_API_TOKEN" \
+  -H "X-Limina-Actor: $LIMINA_ACTOR" \
+  -H "Idempotency-Key: $(uuidgen)" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "slug": "retrieval-codex",
+    "name": "Multilingual retrieval",
+    "objective": "Improve multilingual product retrieval",
+    "success_criteria": "Increase held-out NDCG by 10% without a P95 latency regression",
+    "context": "The current baseline combines BM25 with embeddings",
+    "runtime": "codex"
+  }'
+
+curl http://127.0.0.1:7433/v1/projects/retrieval-codex/review \
+  -H "Authorization: Bearer $LIMINA_API_TOKEN"
+```
+
+Use MCP when another agent should review or operate Limina at the same human-facing boundary. For
+Codex, add this to `~/.codex/config.toml` (or the trusted project's `.codex/config.toml`):
+
+```toml
+[mcp_servers.limina]
+url = "http://127.0.0.1:7433/mcp/"
+bearer_token_env_var = "LIMINA_API_TOKEN"
+
+[mcp_servers.limina.env_http_headers]
+"X-Limina-Actor" = "LIMINA_ACTOR"
+```
+
+For Claude Code, register the same endpoint without storing the token in the file:
+
+```bash
+claude mcp add-json --scope user limina \
+  '{"type":"http","url":"http://127.0.0.1:7433/mcp/","headers":{"Authorization":"Bearer ${LIMINA_API_TOKEN}","X-Limina-Actor":"${LIMINA_ACTOR}"}}'
+```
+
+The MCP surface provides tools to create and manage projects, steer strategy, review knowledge,
+read ordered activity, and manage visible variables. It also provides read-only
+`limina://projects/...` resources for status, reviews, individual H/E/F artifacts, and Markdown
+snapshots. It deliberately does not accept secret values in model-visible tool arguments; set or
+rotate secrets with `limina resource secret` or the authenticated REST endpoint.
+
+For a remote hostname, add it to the server's DNS-rebinding allowlist before starting Compose:
+
+```bash
+LIMINA_MCP_ALLOWED_HOSTS=limina.example.com docker compose up --build
+```
+
+If a browser-based MCP client sends an `Origin` header, also set
+`LIMINA_MCP_ALLOWED_ORIGINS=https://your-client.example.com`. TLS remains required outside a
+trusted local network.
 
 ## Create a project
 
@@ -245,8 +310,8 @@ limina --json review retrieval-claude | jq '.findings[] | {id, title}'
 
 ```mermaid
 flowchart LR
-    Team["Team"] --> CLI["Limina CLI"]
-    CLI --> API["Project API + live WebSocket"]
+    Team["Team"] --> Interfaces["CLI, REST, WebSocket, or MCP"]
+    Interfaces --> API["Shared project operations"]
     API --> Supervisor["Limina project supervisor"]
     Supervisor --> Adapter{"Project runtime"}
     Adapter --> Codex["Codex SDK"]
@@ -256,7 +321,7 @@ flowchart LR
     Codex --> Knowledge["Private H → E → F protocol"]
     Claude --> Knowledge
     Knowledge --> DB
-    DB --> CLI
+    DB --> Interfaces
 ```
 
 Each active project has one Limina-owned supervisory loop and exactly one engine. The loop creates
