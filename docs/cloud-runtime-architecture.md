@@ -1,23 +1,26 @@
-# Limina cloud runtime: architecture decision
+# Limina managed runtime: architecture decision
 
 ## Decision
 
-Limina is the runtime, not a database beside somebody else's runtime.
+Limina owns the runtime, not only the knowledge database.
 
-One Limina project owns a mission, a durable research graph, an isolated workspace, a resumable
-Codex thread, an asynchronous guidance inbox, and one supervised execution loop. Users operate
-the project. Only Limina operates turns, sessions, subagents, checkpoints, leases, retries, and
-thread recovery.
+One Limina project owns a mission, one immutable runtime choice, a durable research graph, an
+isolated workspace, a private resumable continuation, an asynchronous guidance inbox, and one
+supervised execution loop. The runtime may be `codex` or `claude-code`. Users operate the project;
+only Limina operates turns, sessions, subagents, checkpoints, leases, retries, and recovery.
 
 ```mermaid
 flowchart LR
     Team["Team: mission, resources, review, steer"] --> CLI["Limina CLI"]
     CLI --> API["Public project API + live WebSocket"]
     API --> Supervisor["Limina project supervisor"]
-    Supervisor --> Codex["Managed Codex SDK session"]
-    Supervisor --> Workspace["Project workspace"]
-    Supervisor --> DB[("PostgreSQL: canonical project state")]
+    Supervisor --> Adapter{"Immutable project runtime"}
+    Adapter --> Codex["Codex SDK adapter"]
+    Adapter --> Claude["Claude Agent SDK adapter"]
+    Supervisor --> Workspace["Durable project workspace"]
+    Supervisor --> DB[("Canonical project state")]
     Codex --> Capability["Short-lived project capability"]
+    Claude --> Capability
     Capability --> Commands["Private H → E → F commands"]
     Commands --> DB
     DB --> Stream["Durable activity stream"]
@@ -25,100 +28,147 @@ flowchart LR
     DB --> Export["Deterministic Markdown export"]
 ```
 
-## Product boundary
+## Human contract
 
-The complete human contract is:
+The complete public contract is:
 
 1. create, start, pause, resume, stop, archive, and inspect projects;
 2. provide the mission, success criteria, context, variables, and secrets;
-3. review accepted work and knowledge;
-4. give feedback, answer questions, approve decisions, and steer strategy;
-5. attach to a live project to watch and steer the current work synchronously.
+3. choose Codex or Claude Code when a project is created;
+4. review accepted work and knowledge;
+5. give feedback, answer questions, approve decisions, and steer strategy;
+6. attach to a live project to watch and steer current work synchronously.
 
-The public OpenAPI schema and CLI deliberately contain no worker, session, thread, subagent,
-lease, checkpoint, version, or inbox-cursor controls. Those concepts exist only behind the Limina
-runtime boundary.
+The public OpenAPI schema and CLI expose no worker, session, thread, subagent, lease, checkpoint,
+version, or inbox-cursor controls. Provider session IDs are stored as private `continuation_id`
+state so the rest of Limina does not depend on either provider's terminology.
 
-## Why the Codex SDK is behind Limina
+## Engine boundary
 
-The official [Codex SDK](https://developers.openai.com/codex/sdk/) is intended for embedding
-Codex in internal applications and supports continuing or resuming threads. The underlying
-[app-server protocol](https://developers.openai.com/codex/app-server/) streams turn/item events,
-accepts `turn/steer` during an active turn, and supports `turn/interrupt`. The Python SDK exposes
-those operations through its turn handle, so Limina can provide a project-level experience while
-keeping Codex lifecycle details private.
+The project supervisor depends on a small internal runtime contract:
 
-This implementation uses the official Python SDK adapter. It persists a newly created thread ID
-before tools execute, resumes that thread on later checkpoints, streams selected SDK notifications
-into Limina's event log, sends live feedback through the active turn handle, and interrupts the
-turn for pause/stop operations.
+- run a managed turn in a workspace from an optional continuation;
+- stream sanitized runtime activity;
+- persist a new continuation before relying on it;
+- steer or interrupt active work;
+- return one structured project checkpoint;
+- close provider resources during shutdown.
+
+Both adapters satisfy that contract, so lifecycle, durable guidance, knowledge writes, leases,
+redaction, and recovery are provider-independent.
+
+| Behavior | Codex | Claude Code |
+|---|---|---|
+| SDK | `openai-codex` Python SDK | `claude-agent-sdk` Python SDK |
+| Continuity | Codex thread ID | Claude session ID |
+| Structured checkpoint | turn JSON output schema | SDK JSON-schema output format |
+| Active steering | steer the current turn | interrupt response, then query the same session with guidance |
+| Pause/stop | interrupt active turn | interrupt active response |
+| Activity | selected turn/item notifications | selected assistant/tool/task messages |
+| Private state | persisted before/at turn execution | persisted as soon as SDK messages expose the session ID |
+
+The runtime is immutable after project creation. Switching a live research graph from one provider
+continuation model to another would make recovery ambiguous and invalidate behavioral comparisons.
+An engine comparison should be two projects with independent histories and explicit evidence.
+
+### Codex adapter
+
+The official [Codex SDK](https://developers.openai.com/codex/sdk/) supports starting and resuming
+threads. Its [app-server protocol](https://developers.openai.com/codex/app-server/) exposes turn
+events, steering, and interruption. Limina creates or resumes the private thread, persists its ID
+before tools run, supplies a JSON output schema, streams selected notifications, and uses the
+active turn handle for steering and lifecycle interruption. In the Docker image, `CODEX_HOME` is
+stored on the Limina volume so local thread data survives container replacement.
+
+### Claude Code adapter
+
+The official [Claude Agent SDK for Python](https://platform.claude.com/docs/en/agent-sdk/python)
+supports persistent `ClaudeSDKClient` sessions, resume, interrupt, tool permission callbacks, and
+structured outputs. Limina uses the SDK's bundled Claude Code CLI, stores its private config below
+the Limina volume, disables user/project setting inheritance, enables sandboxing, and persists the
+session ID as the provider-neutral continuation.
+
+Claude's interrupt API stops the current response rather than injecting text into that response.
+Therefore a live Limina steer is implemented as an interrupt followed immediately by a new query
+on the same connected session containing all steering that arrived. The project remains one
+continuous Claude session; users do not manage that transition.
+
+Claude Code may clean old local session data by default. Limina writes a private SDK settings file
+with a long cleanup period and keeps `CLAUDE_CONFIG_DIR` on the durable volume. The database still
+owns the checkpoint and session pointer; the provider transcript is supporting continuation state,
+not the canonical knowledge base.
 
 ## State ownership
 
-PostgreSQL is the canonical live state. Markdown is a deterministic read/export projection, and
-Git is an optional review/archive destination.
+PostgreSQL is the canonical live state. The default single-node deployment uses the same schema on
+SQLite. Markdown is a deterministic read/export projection, and Git is an optional review/archive
+destination.
 
 The database owns:
 
-- project mission, lifecycle, and current objective;
+- project mission, immutable runtime choice, lifecycle, and current objective;
 - the H → E → F research graph and immutable revisions;
 - append-only experiment observations;
-- visible project variables and encrypted project secrets;
-- asynchronous human guidance and acknowledgement;
+- visible variables and encrypted secrets;
+- asynchronous guidance and acknowledgement;
 - a monotonic attributed event stream;
-- private SDK continuity and runtime leases;
+- private provider continuation state and runtime leases;
 - idempotency receipts for every mutation.
 
-Variables cover URLs, paths, flags, and other visible configuration. Secrets are encrypted before
-they enter the database and are redacted from API responses, command receipts, events, reviews,
-and prompts. Both are materialized as environment variables only for the managed project turn.
+Variables cover URLs, paths, flags, and visible configuration. Secrets are encrypted before
+database persistence and omitted from public API responses, command receipts, events, reviews, and
+prompts. Both become environment variables only for the selected managed runtime turn. Resource
+rotation and revocation are queued durably, interrupt active work, discard its stale checkpoint,
+and restart the turn with a newly materialized child environment.
 
-The workspace owns code, checked-out repositories, generated artifacts, and experiment files. A
-project workspace lives independently of any one turn or process. Object storage is the natural
-next backing store for large evidence; its URI belongs in the research graph.
+The workspace owns checked-out repositories, generated artifacts, code, and experiment files. It
+lives independently of any one turn or process. Large evidence should live in object storage with
+its URI represented in the research graph.
 
-## Parallelism and KB writes
+## Parallelism and knowledge writes
 
-There are two different coordination problems and they should not share one global lock.
+Project strategy and evidence production have different coordination requirements; they should
+not share one global lock.
 
 | Scope | Coordination rule | Why |
 |---|---|---|
-| Project strategy | One renewable coordinator lease | Prevents two top-level turns from making contradictory mission decisions. |
-| New H/E/F IDs | Atomic counter per project and kind | Concurrent creators get distinct monotonic IDs. |
-| Independent experiments | Lease per `E###` | Different experiments can run in parallel; the same experiment cannot have competing owners. |
+| Project strategy | One renewable coordinator lease | Prevents contradictory top-level mission decisions. |
+| New H/E/F IDs | Atomic counter per project and kind | Concurrent creators receive distinct monotonic IDs. |
+| Independent experiments | Lease per `E###` | Different experiments may run in parallel; one experiment has one writer. |
 | Observations | Append-only rows | Parallel evidence does not rewrite a shared document. |
-| Decisions/completion | Compare-and-swap on artifact version | Stale synthesis fails instead of overwriting newer knowledge. |
-| Human guidance/events | Append-only sequence | Multiple teammates retain a stable total order and attribution. |
-| Export | Rebuild from a committed snapshot | Export never participates in live locking. |
+| Decisions/completion | Compare-and-swap on artifact version | Stale synthesis cannot overwrite newer knowledge. |
+| Guidance/events | Append-only sequence | Teammates retain stable ordering and attribution. |
+| Export | Rebuild from a committed snapshot | Export does not participate in live locking. |
 
-Codex may use subagents internally. A subagent lane can identify itself with
-`LIMINA_AGENT_LANE`; the project capability remains scoped to one project while experiment leases
-remain lane-specific. Strategy stays serialized at the top level, but evidence production is
-parallel wherever the graph says it is independent.
+Either provider may use subagents internally. A subagent lane can identify itself with
+`LIMINA_AGENT_LANE`; its short-lived capability remains scoped to one project while experiment
+leases remain lane-specific. Strategy is serialized at the top level, while independent evidence
+production may proceed in parallel.
 
-This is the core answer to parallel KB writes: serialize semantic transitions, not files. Git
-cannot atomically express “complete E004 only if it is still version 3 and this lane still owns its
-lease.” PostgreSQL can. Git remains useful after the transaction as a reviewable projection.
+This is why Git is not the canonical write path. Git cannot atomically express “complete E004 only
+if it is still version 3 and this lane still owns its lease.” A relational transaction can. Git
+remains useful after the transaction as a reviewable projection.
 
 ## Synchronous and asynchronous steering
 
-Every steering message is committed to the durable guidance inbox first.
+Every message is committed to the durable guidance inbox before Limina attempts live delivery.
 
-- If a Codex turn is active, Limina also calls the SDK's live steer operation and records the
-  message for acknowledgement in that turn's checkpoint.
-- If no turn is active, the message remains pending and wakes a waiting project.
-- `limina attach` opens a project WebSocket, replays durable events, then multiplexes live events
-  and terminal input.
-- Multiple attached users see the same persisted event order. Their input is attributed and
-  sequenced by the database, not by whichever WebSocket happens to arrive first.
-- `/interrupt` interrupts the active turn and pauses the project. Disconnecting only detaches the
-  viewer; it does not stop Limina.
+- For Codex, Limina calls the active turn's steer operation.
+- For Claude Code, Limina interrupts the active response and immediately redirects the same SDK
+  session with the accumulated guidance.
+- If no turn is active, the pending message wakes a waiting project and enters the next prompt.
+- `limina attach` opens a project WebSocket, replays durable events, and multiplexes live events
+  with terminal input.
+- Multiple attached users see one persisted event order. Input is attributed and sequenced by the
+  database, not by connection timing.
+- `/interrupt` pauses the project after interrupting active work. Disconnecting only detaches the
+  viewer.
 
-Delivery is durable even when “live” delivery is unavailable. Live steering is intentionally
-best-effort on top of durable inbox acceptance because no external model stream can participate in
-the database transaction.
+Live delivery is best-effort on top of durable acceptance because an external model stream cannot
+join the database transaction. A failure at the boundary may replay a message, so prompts and
+knowledge commands are designed to tolerate at-least-once guidance.
 
-## Runtime lifecycle and recovery
+## Lifecycle and recovery
 
 ```mermaid
 stateDiagram-v2
@@ -139,43 +189,53 @@ stateDiagram-v2
     COMPLETE --> ARCHIVED: archive
 ```
 
-The API process starts the project supervisor in its lifespan. Startup scans for `RUNNING` and
-`WAITING` projects and reconstructs their loops. A turn:
+The API lifespan starts the supervisor. Startup scans `RUNNING` and `WAITING` projects and
+reconstructs their loops. A turn:
 
 1. acquires and renews the project coordinator lease;
-2. snapshots mission, active state, resources, and pending guidance;
-3. creates or resumes the private Codex thread and persists its ID immediately;
-4. issues a short-lived, project-scoped capability for private research commands;
-5. runs and streams the Codex turn in the project workspace;
-6. validates a structured runtime decision;
-7. commits the new objective/status and guidance acknowledgements atomically;
-8. revokes the capability and releases the coordinator lease.
+2. snapshots mission, state, resources, and pending guidance;
+3. selects the project's immutable runtime adapter;
+4. creates or resumes its private continuation and persists that pointer;
+5. issues a short-lived, project-scoped capability for research commands;
+6. runs and streams the managed turn in the durable workspace;
+7. validates a provider-independent structured checkpoint;
+8. commits objective, status, and guidance acknowledgements atomically;
+9. revokes the capability and releases the coordinator lease.
 
-If the process dies, accepted KB writes and guidance remain. Another Limina replica may take the
-lease after expiry and resume from the persisted thread/checkpoint. A heartbeat prevents lease
-expiry during a long turn.
+If the process dies, accepted knowledge writes and guidance remain. A replica may take the lease
+after expiry and resume from the provider continuation and canonical checkpoint. A heartbeat
+prevents lease expiry during long turns; lease loss interrupts work rather than accepting a stale
+checkpoint.
 
 ## Security boundary
 
-The Codex child process does not receive the PostgreSQL URL or the Limina administrative token.
-It receives a random, short-lived capability restricted to one active project. The capability is
-revoked after the turn. Project variables and decrypted secrets are copied into that turn only;
-reserved process and control-plane names cannot be overridden.
+The child runtime does not receive the database URL or Limina administrative token. It receives a
+random, short-lived capability restricted to one active project. Project variables and decrypted
+secrets are copied into that turn only. Reserved control-plane and provider credential names cannot
+be replaced by project resources.
 
-The reference instance encrypts secrets with a persistent Fernet key. The single-container mode
-generates that key with restrictive file permissions inside the durable `limina-data` volume. A
-multi-replica deployment must provide the same `LIMINA_SECRET_KEY` to every replica from a secret
-manager. Losing the key makes existing secrets intentionally unrecoverable.
+Both adapters construct allow-listed child environments and explicitly blank unapproved inherited
+values because provider SDKs launch subprocesses from the control-plane process. Exact resource
+values are redacted from streamed events, structured decisions, and adapter error details.
 
-The co-located key in single-container mode protects against plaintext appearing in database
-queries, exports, logs, or an isolated database backup; it does not protect an attacker who gains
-the entire Docker volume. Internet-facing and multi-host deployments should always supply the key
-from an external secret manager.
+Claude Code additionally receives a private `CLAUDE_CONFIG_DIR`, subprocess environment scrubbing,
+no inherited setting sources, and a permission callback that constrains direct file tools to the
+project workspace. The image installs the Linux sandbox dependencies, requires sandbox startup to
+succeed, disables unsandboxed commands, and denies Bash read access to Limina's state root while
+re-allowing the active workspace. The weaker nested-sandbox mode is enabled only by the Docker
+image, whose outer container is the additional boundary. Codex uses the selected SDK sandbox
+profile; the default is `workspace-write` with network access.
 
-The prototype public API uses one bearer token and trusts the supplied actor for attribution. A
-production team deployment should replace that edge with TLS plus OIDC/JWT, derive actor identity
-server-side, add project-level roles, use a secrets manager, and isolate project workspaces at the
-container or microVM boundary. The internal capability model remains useful behind that edge.
+The reference instance encrypts secrets with a persistent Fernet key. In single-container mode the
+key is generated with restrictive permissions inside `limina-data`. Replicas must receive one
+shared `LIMINA_SECRET_KEY` from a secrets manager. Losing the key makes existing secrets
+unrecoverable by design.
+
+The co-located key protects against plaintext in database queries, exports, logs, or an isolated
+database backup; it does not protect an attacker with the complete volume and key. The prototype
+public API also uses one bearer token and trusts caller-supplied actor attribution. An
+internet-facing deployment needs TLS, OIDC/JWT, server-derived identity, project roles, an external
+secret manager, and per-project container or microVM isolation.
 
 ## Stack
 
@@ -183,26 +243,25 @@ container or microVM boundary. The internal capability model remains useful behi
 |---|---|
 | Runtime and domain | Python 3.11+, typed service layer |
 | Codex | Official `openai-codex` Python SDK |
+| Claude Code | Official `claude-agent-sdk` Python SDK with bundled CLI |
 | Public control/live transport | FastAPI HTTP + WebSocket |
 | CLI | Typer, Rich, `websockets` |
 | Canonical persistence | PostgreSQL + SQLAlchemy 2 |
 | Schema evolution | Alembic |
-| Local tests/development | SQLite WAL |
+| Local/single-node storage | SQLite WAL |
 | Packaging | `uv`, locked `pyproject.toml` |
-| Default deployment | One runtime container + persistent SQLite volume |
-| Scale-out deployment | One runtime image + PostgreSQL |
+| Default deployment | One runtime image + persistent SQLite volume |
+| Scale-out deployment | The same runtime image + PostgreSQL |
 
-Python is the pragmatic choice because Limina's validator and KB tooling already use it and the
-official Codex Python SDK now exposes the required runtime primitives. A future rich GUI may use
-app-server directly inside the adapter, but it should not change the project-level public model.
+Python keeps the supervisor and both official SDK adapters in one process model, while the adapter
+contract prevents provider details from leaking into the product interface.
 
-## Deliberate next production layers
+## Production layers still required
 
-The branch implements the application boundary and a one-command single-instance deployment.
-`docker compose up --build` starts the complete server; the PostgreSQL Compose file remains the
-scale-out reference. Before
-multi-tenant internet exposure, add OIDC/RBAC, a secret manager, per-project sandbox containers or
-microVMs, durable object storage, quotas, audit export, metrics/traces, and a transactional outbox.
-For horizontal replicas, PostgreSQL leases already prevent duplicate top-level turns; an external
-workflow scheduler can later improve timers and operational visibility without becoming the owner
-of Codex sessions.
+The branch implements the application boundary and a one-command trusted-team deployment. Before
+untrusted multi-tenant exposure, add OIDC/RBAC, a secrets manager, per-project sandbox containers
+or microVMs, object storage, quotas, audit export, metrics/traces, and a transactional outbox.
+
+For horizontal replicas, PostgreSQL leases already prevent duplicate top-level turns. An external
+workflow scheduler may later improve timers and operations, but it must remain an internal Limina
+component rather than becoming the owner of provider sessions.

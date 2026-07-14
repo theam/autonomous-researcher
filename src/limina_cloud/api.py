@@ -7,7 +7,7 @@ import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 from uuid import uuid4
 
 from fastapi import Depends, FastAPI, Header, Query, Request, WebSocket, WebSocketDisconnect
@@ -16,6 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
 from . import __version__
 from .database import Database
+from .engines import SUPPORTED_RUNTIME_ENGINES
 from .errors import AuthenticationError, InvariantError, LiminaError
 from .exporter import MarkdownExporter
 from .runtime import AgentFactory, ProjectSupervisor
@@ -33,6 +34,7 @@ class CreateProjectRequest(CommandModel):
     objective: str
     success_criteria: str
     context: str = ""
+    runtime: Literal["codex", "claude-code"] = "codex"
 
 
 class SteeringRequest(CommandModel):
@@ -133,6 +135,7 @@ def _public_project(project: dict[str, Any]) -> dict[str, Any]:
         "mission": project["objective"],
         "success_criteria": project["success_criteria"],
         "context": project["context"],
+        "runtime": project["runtime_engine"],
         "status": "ARCHIVED" if project["status"] == "ARCHIVED" else coordinator["status"],
         "current_objective": coordinator["current_objective"],
         "next_step": coordinator["next_step"],
@@ -201,6 +204,7 @@ def _public_event(event: dict[str, Any]) -> dict[str, Any] | None:
         not in {
             "worker_id",
             "thread_id",
+            "continuation_id",
             "turn_id",
             "version",
             "expires_at",
@@ -210,7 +214,11 @@ def _public_event(event: dict[str, Any]) -> dict[str, Any] | None:
     actor = event["actor"]
     if actor.startswith("limina:"):
         actor = "Limina"
-    if event_type == "runtime.codex" and "limina _agent" in str(payload.get("summary", "")):
+    if event_type == "challenge.created" and "runtime_engine" in payload:
+        payload["runtime"] = payload.pop("runtime_engine")
+    if event_type in {"runtime.codex", "runtime.claude-code"} and "limina _agent" in str(
+        payload.get("summary", "")
+    ):
         payload["summary"] = "Updating durable project knowledge"
     return {
         "sequence": event["sequence"],
@@ -319,7 +327,12 @@ def create_app(
 
     @app.get("/healthz")
     def health(_auth: None = Depends(require_auth)) -> dict[str, Any]:
-        return {"ok": True, "version": __version__, "runtime_owner": "limina"}
+        return {
+            "ok": True,
+            "version": __version__,
+            "runtime_owner": "limina",
+            "runtimes": list(SUPPORTED_RUNTIME_ENGINES),
+        }
 
     @app.post("/v1/projects", status_code=201)
     def create_project(
@@ -328,8 +341,13 @@ def create_app(
         _auth: None = Depends(require_auth),
     ) -> dict[str, Any]:
         actor, command_id = headers
+        values = body.model_dump()
+        runtime_engine = values.pop("runtime")
         project = runtime.service.create_challenge(
-            **body.model_dump(), actor=actor, command_id=command_id
+            **values,
+            runtime_engine=runtime_engine,
+            actor=actor,
+            command_id=command_id,
         )
         return _public_project(project)
 
@@ -440,11 +458,13 @@ def create_app(
         )
         await runtime.supervisor.submit_message(
             slug=slug,
-            body=f"Project variable '{resource['name']}' was set and is now available.",
+            body=f"Project variable '{resource['name']}' was set.",
             kind="ANSWER",
             actor=actor,
             command_id=f"{command_id}:resource",
+            live_delivery=False,
         )
+        await runtime.supervisor.refresh_resources(slug)
         project = runtime.service.get_challenge(slug)
         if project["coordinator"]["status"] in {"RUNNING", "WAITING"}:
             await runtime.supervisor.ensure_running(slug)
@@ -468,11 +488,13 @@ def create_app(
         )
         await runtime.supervisor.submit_message(
             slug=slug,
-            body=f"Project secret '{resource['name']}' was set and is now available.",
+            body=f"Project secret '{resource['name']}' was set.",
             kind="ANSWER",
             actor=actor,
             command_id=f"{command_id}:resource",
+            live_delivery=False,
         )
+        await runtime.supervisor.refresh_resources(slug)
         project = runtime.service.get_challenge(slug)
         if project["coordinator"]["status"] in {"RUNNING", "WAITING"}:
             await runtime.supervisor.ensure_running(slug)
@@ -502,7 +524,9 @@ def create_app(
             kind="STEER",
             actor=actor,
             command_id=f"{command_id}:resource",
+            live_delivery=False,
         )
+        await runtime.supervisor.refresh_resources(slug)
         project = runtime.service.get_challenge(slug)
         if project["coordinator"]["status"] in {"RUNNING", "WAITING"}:
             await runtime.supervisor.ensure_running(slug)

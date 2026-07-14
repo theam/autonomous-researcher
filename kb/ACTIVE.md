@@ -7,16 +7,19 @@ type: active-state
 
 ## Current Objective
 
-Set up the first research step for the mission.
+Ship one Limina-owned supervisor with selectable Codex and Claude Code runtimes.
 
 ## Next Step
 
-Read the mission brief and turn it into the first concrete hypothesis.
+Review the two-runtime implementation and, when Anthropic credentials are available, record a live
+Claude Code restart-and-steering smoke test.
 
 ## Blocker
 
-None.
+Live Claude Code provider behavior is covered by an SDK contract test but has not yet been exercised
+against the Anthropic API.
 
 ## Links
 
 - Mission: [[CHALLENGE]]
+- Architecture: [Managed runtime decision](../docs/cloud-runtime-architecture.md)

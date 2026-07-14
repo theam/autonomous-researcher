@@ -18,6 +18,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .database import Database
+from .engines import normalize_runtime_engine
 from .errors import ConflictError, InvariantError, LeaseConflictError, NotFoundError
 from .models import (
     Artifact,
@@ -41,6 +42,10 @@ ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 RESOURCE_VALUE_LIMIT = 32_768
 RESERVED_RESOURCE_NAMES = {
     "ALL_PROXY",
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "ANTHROPIC_BASE_URL",
+    "CLAUDE_CONFIG_DIR",
     "CODEX_API_KEY",
     "COLORTERM",
     "HOME",
@@ -110,6 +115,7 @@ class ChallengeService:
         objective: str,
         success_criteria: str,
         context: str,
+        runtime_engine: str = "codex",
         actor: str,
         command_id: str,
     ) -> dict[str, Any]:
@@ -122,6 +128,10 @@ class ChallengeService:
         self._require_text("name", name)
         self._require_text("objective", objective)
         self._require_text("success criteria", success_criteria)
+        try:
+            runtime_engine = normalize_runtime_engine(runtime_engine)
+        except ValueError as exc:
+            raise InvariantError(str(exc), runtime_engine=runtime_engine) from exc
 
         def operation(session: Session) -> dict[str, Any]:
             if session.scalar(select(Challenge).where(Challenge.slug == slug)) is not None:
@@ -132,6 +142,7 @@ class ChallengeService:
                 objective=objective.strip(),
                 context=context.strip(),
                 success_criteria=success_criteria.strip(),
+                runtime_engine=runtime_engine,
             )
             session.add(challenge)
             session.flush()
@@ -149,7 +160,11 @@ class ChallengeService:
                 event_type="challenge.created",
                 actor=actor,
                 command_id=command_id,
-                payload={"slug": slug, "name": challenge.name},
+                payload={
+                    "slug": slug,
+                    "name": challenge.name,
+                    "runtime_engine": runtime_engine,
+                },
             )
             session.flush()
             return self._challenge_dict(challenge, coordinator)
@@ -1014,7 +1029,7 @@ class ChallengeService:
         blocker: str,
         status: str,
         worker_id: str | None,
-        thread_id: str | None,
+        continuation_id: str | None,
         inbox_cursor: int,
         expected_version: int,
         actor: str,
@@ -1070,7 +1085,7 @@ class ChallengeService:
                     blocker=blocker.strip() or "None",
                     status=status,
                     worker_id=worker_id,
-                    thread_id=thread_id,
+                    continuation_id=continuation_id,
                     inbox_cursor=inbox_cursor,
                     heartbeat_at=utcnow(),
                     updated_at=utcnow(),
@@ -1101,7 +1116,7 @@ class ChallengeService:
                     "status": status,
                     "version": coordinator.version,
                     "worker_id": worker_id,
-                    "thread_id": thread_id,
+                    "continuation_id": continuation_id,
                     "inbox_cursor": inbox_cursor,
                     "messages_acknowledged": len(messages),
                 },
@@ -1296,6 +1311,8 @@ class ChallengeService:
             )
         if (
             name in RESERVED_RESOURCE_NAMES
+            or name.startswith("ANTHROPIC_")
+            or name.startswith("CLAUDE_")
             or name.startswith("CODEX_")
             or name.startswith("DYLD_")
             or name.startswith("LIMINA_")
@@ -1533,6 +1550,7 @@ class ChallengeService:
             "objective": challenge.objective,
             "context": challenge.context,
             "success_criteria": challenge.success_criteria,
+            "runtime_engine": challenge.runtime_engine,
             "status": challenge.status,
             "version": challenge.version,
             "created_at": _iso(challenge.created_at),
@@ -1548,7 +1566,7 @@ class ChallengeService:
             "next_step": coordinator.next_step,
             "blocker": coordinator.blocker,
             "worker_id": coordinator.worker_id,
-            "thread_id": coordinator.thread_id,
+            "continuation_id": coordinator.continuation_id,
             "inbox_cursor": coordinator.inbox_cursor,
             "version": coordinator.version,
             "heartbeat_at": _iso(coordinator.heartbeat_at),

@@ -18,7 +18,7 @@ install-skills:
 check: test validate
 
 runtime-sync:
-	$(UV) sync --extra codex
+	$(UV) sync --extra runtimes
 
 runtime-test:
 	$(UV) run python -m unittest discover -s tests
@@ -31,7 +31,7 @@ runtime-schema-sql:
 	LIMINA_DATABASE_URL=postgresql+psycopg://limina:limina@localhost/limina $(UV) run alembic upgrade head --sql >/dev/null
 
 runtime-compose:
-	OPENAI_API_KEY=test LIMINA_API_TOKEN=test docker compose config >/dev/null
-	LIMINA_API_TOKEN=test docker compose -f compose.cloud.yaml config >/dev/null
+	OPENAI_API_KEY=test ANTHROPIC_API_KEY=test LIMINA_API_TOKEN=test docker compose config >/dev/null
+	OPENAI_API_KEY=test ANTHROPIC_API_KEY=test LIMINA_API_TOKEN=test docker compose -f compose.cloud.yaml config >/dev/null
 
 runtime-check: runtime-lint runtime-test runtime-schema-sql runtime-compose validate

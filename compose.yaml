@@ -5,9 +5,11 @@ services:
       dockerfile: Dockerfile.cloud
     environment:
       LIMINA_API_TOKEN: ${LIMINA_API_TOKEN:?Set LIMINA_API_TOKEN}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:?Set OPENAI_API_KEY}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       LIMINA_CODEX_MODEL: ${LIMINA_CODEX_MODEL:-gpt-5.4}
       LIMINA_CODEX_SANDBOX: ${LIMINA_CODEX_SANDBOX:-workspace-write}
+      LIMINA_CLAUDE_MODEL: ${LIMINA_CLAUDE_MODEL:-}
     ports:
       - "${LIMINA_PORT:-7433}:7433"
     volumes:

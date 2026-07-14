@@ -12,13 +12,22 @@ from unittest import mock
 from uuid import uuid4
 
 from limina_cloud.database import Database
-from limina_cloud.errors import ConflictError, InvariantError, LeaseConflictError, NotFoundError
+from limina_cloud.errors import (
+    ConflictError,
+    InvariantError,
+    LeaseConflictError,
+    NotFoundError,
+    TransportError,
+)
 from limina_cloud.exporter import MarkdownExporter
 from limina_cloud.runtime import (
+    TURN_OUTPUT_SCHEMA,
+    ClaudeCodeAgentSession,
     ProjectSupervisor,
     RuntimeDecision,
     RuntimeEvent,
     RuntimeTurn,
+    _claude_environment,
     _codex_environment,
     _redact_event,
     _redact_turn,
@@ -87,6 +96,7 @@ class CloudRuntimeTests(unittest.TestCase):
             os.environ,
             {
                 "OPENAI_API_KEY": "sdk-key",
+                "CODEX_HOME": "/var/lib/limina/codex",
                 "LIMINA_DATABASE_URL": "postgresql://control-plane",
                 "LIMINA_API_TOKEN": "admin-token",
                 "LIMINA_SECRET_KEY": "master-key",
@@ -102,10 +112,33 @@ class CloudRuntimeTests(unittest.TestCase):
             )
 
         self.assertEqual(child["OPENAI_API_KEY"], "sdk-key")
+        self.assertEqual(child["CODEX_HOME"], "/var/lib/limina/codex")
         self.assertEqual(child["LIMINA_DATABASE_URL"], "")
         self.assertEqual(child["LIMINA_API_TOKEN"], "")
         self.assertEqual(child["LIMINA_SECRET_KEY"], "")
         self.assertEqual(child["UNRELATED_SECRET"], "")
+        self.assertEqual(child["LIMINA_INTERNAL_TOKEN"], "project-capability")
+
+    def test_claude_child_environment_is_scoped_and_persistent(self) -> None:
+        config_dir = Path(self.temp_dir.name) / "claude" / "retrieval"
+        with mock.patch.dict(
+            os.environ,
+            {
+                "ANTHROPIC_API_KEY": "claude-key",
+                "OPENAI_API_KEY": "other-provider-key",
+                "LIMINA_DATABASE_URL": "postgresql://control-plane",
+                "LIMINA_SECRET_KEY": "master-key",
+            },
+            clear=True,
+        ):
+            child = _claude_environment({"LIMINA_INTERNAL_TOKEN": "project-capability"}, config_dir)
+
+        self.assertEqual(child["ANTHROPIC_API_KEY"], "claude-key")
+        self.assertEqual(child["OPENAI_API_KEY"], "")
+        self.assertEqual(child["LIMINA_DATABASE_URL"], "")
+        self.assertEqual(child["LIMINA_SECRET_KEY"], "")
+        self.assertEqual(child["CLAUDE_CONFIG_DIR"], str(config_dir))
+        self.assertEqual(child["CLAUDE_CODE_SUBPROCESS_ENV_SCRUB"], "1")
         self.assertEqual(child["LIMINA_INTERNAL_TOKEN"], "project-capability")
 
     def test_runtime_events_and_decisions_redact_project_secret_values(self) -> None:
@@ -152,6 +185,59 @@ class CloudRuntimeTests(unittest.TestCase):
         loaded = self.service.get_artifact("retrieval", str(created["id"]))
         self.assertEqual(created["created_at"], loaded["created_at"])
         self.assertTrue(str(loaded["created_at"]).endswith("+00:00"))
+
+    def test_project_runtime_engine_is_explicit_and_immutable(self) -> None:
+        created = self.service.create_challenge(
+            slug="claude-research",
+            name="Claude research",
+            objective="Run with Claude Code.",
+            context="",
+            success_criteria="Persist the selected engine.",
+            runtime_engine="claude-code",
+            actor="owner",
+            command_id=command_id(),
+        )
+        self.assertEqual(created["runtime_engine"], "claude-code")
+        self.assertEqual(
+            self.service.get_challenge("claude-research")["runtime_engine"],
+            "claude-code",
+        )
+        with self.assertRaises(InvariantError):
+            self.service.create_challenge(
+                slug="unknown-engine",
+                name="Unknown",
+                objective="Reject invalid engines.",
+                context="",
+                success_criteria="Creation fails.",
+                runtime_engine="other",
+                actor="owner",
+                command_id=command_id(),
+            )
+
+    def test_default_factory_selects_and_hardens_the_claude_runtime(self) -> None:
+        workspace_root = Path(self.temp_dir.name) / "workspaces"
+        supervisor = ProjectSupervisor(
+            self.service,
+            MarkdownExporter(self.service),
+            workspace_root=workspace_root,
+            internal_url="http://127.0.0.1:7433",
+        )
+        config_root = Path(self.temp_dir.name) / "claude-state"
+        with mock.patch.dict(
+            os.environ,
+            {
+                "LIMINA_CLAUDE_CONFIG_DIR": str(config_root),
+                "LIMINA_CLAUDE_WEAKER_NESTED_SANDBOX": "true",
+            },
+        ):
+            session = supervisor._default_agent_factory("retrieval", "claude-code")
+
+        self.assertIsInstance(session, ClaudeCodeAgentSession)
+        self.assertEqual(session.config_dir, config_root / "retrieval")
+        self.assertEqual(session.state_root, workspace_root.parent)
+        self.assertTrue(session.weaker_nested_sandbox)
+        with self.assertRaises(TransportError):
+            supervisor._default_agent_factory("retrieval", "unknown")  # type: ignore[arg-type]
 
     def test_hef_invariants_are_enforced_transactionally(self) -> None:
         with self.assertRaises(NotFoundError):
@@ -294,6 +380,252 @@ class CloudRuntimeTests(unittest.TestCase):
         )
         self.assertEqual(claimed["owner"], "worker-b")
 
+    def test_claude_adapter_resumes_and_normalizes_the_sdk_contract(self) -> None:
+        class ClaudeAgentOptions:
+            def __init__(self, **values) -> None:
+                self.values = values
+
+        class PermissionResultAllow:
+            def __init__(self, **values) -> None:
+                self.values = values
+
+        class PermissionResultDeny(PermissionResultAllow):
+            pass
+
+        class ToolUseBlock:
+            def __init__(self, name: str) -> None:
+                self.name = name
+
+        class AssistantMessage:
+            def __init__(self) -> None:
+                self.content = [ToolUseBlock("Bash")]
+                self.message_id = "message-123"
+
+        class SystemMessage:
+            data = {"session_id": "claude-session"}
+
+        class ResultMessage:
+            session_id = "claude-session"
+            is_error = False
+            stop_reason = "end_turn"
+            result = None
+            structured_output = {
+                "summary": "Claude checkpointed the work.",
+                "status": "COMPLETE",
+                "current_objective": "Verify the result.",
+                "next_step": "Present the finding.",
+                "blocker": "None",
+            }
+
+        class ClaudeSDKClient:
+            instance = None
+
+            def __init__(self, options) -> None:
+                self.options = options
+                self.queries: list[str] = []
+                self.disconnected = False
+                type(self).instance = self
+
+            async def connect(self) -> None:
+                return None
+
+            async def query(self, prompt: str) -> None:
+                self.queries.append(prompt)
+
+            async def receive_response(self):
+                yield SystemMessage()
+                yield AssistantMessage()
+                yield ResultMessage()
+
+            async def interrupt(self) -> None:
+                return None
+
+            async def disconnect(self) -> None:
+                self.disconnected = True
+
+        session = ClaudeCodeAgentSession(
+            config_dir=Path(self.temp_dir.name) / "claude" / "project",
+            state_root=Path(self.temp_dir.name),
+            model="claude-test",
+        )
+        events: list[RuntimeEvent] = []
+        continuations: list[str] = []
+
+        async def run() -> RuntimeTurn:
+            return await session.run_turn(
+                prompt="Advance the mission.",
+                workspace=Path(self.temp_dir.name) / "workspace",
+                continuation_id="previous-session",
+                runtime_env={"LIMINA_INTERNAL_TOKEN": "capability"},
+                on_event=events.append,
+                on_continuation=continuations.append,
+            )
+
+        Path(self.temp_dir.name, "workspace").mkdir()
+        with mock.patch.multiple(
+            "claude_agent_sdk",
+            AssistantMessage=AssistantMessage,
+            ClaudeAgentOptions=ClaudeAgentOptions,
+            ClaudeSDKClient=ClaudeSDKClient,
+            PermissionResultAllow=PermissionResultAllow,
+            PermissionResultDeny=PermissionResultDeny,
+            ResultMessage=ResultMessage,
+        ):
+            turn = asyncio.run(run())
+
+        client = ClaudeSDKClient.instance
+        self.assertIsNotNone(client)
+        options = client.options.values
+        self.assertEqual(options["resume"], "previous-session")
+        self.assertEqual(options["model"], "claude-test")
+        self.assertEqual(options["output_format"]["schema"], TURN_OUTPUT_SCHEMA)
+        self.assertTrue(options["sandbox"]["enabled"])
+        self.assertTrue(options["sandbox"]["failIfUnavailable"])
+        self.assertFalse(options["sandbox"]["allowUnsandboxedCommands"])
+        self.assertFalse(options["sandbox"]["enableWeakerNestedSandbox"])
+        self.assertEqual(
+            options["sandbox"]["filesystem"]["allowRead"],
+            [str(Path(self.temp_dir.name, "workspace").resolve())],
+        )
+        self.assertIn(
+            str(Path(self.temp_dir.name).resolve()),
+            options["sandbox"]["filesystem"]["denyRead"],
+        )
+        self.assertEqual(options["env"]["LIMINA_INTERNAL_TOKEN"], "capability")
+        self.assertTrue(Path(options["settings"]).is_file())
+        self.assertEqual(Path(options["settings"]).stat().st_mode & 0o777, 0o600)
+        self.assertEqual(Path(options["settings"]).parent.stat().st_mode & 0o777, 0o700)
+        self.assertIn('"cleanupPeriodDays": 3650', Path(options["settings"]).read_text())
+        inside_permission = asyncio.run(
+            options["can_use_tool"](
+                "Read",
+                {"file_path": str(Path(self.temp_dir.name) / "workspace" / "inside.txt")},
+                None,
+            )
+        )
+        outside_permission = asyncio.run(
+            options["can_use_tool"](
+                "Read",
+                {"file_path": str(Path(self.temp_dir.name) / "outside.txt")},
+                None,
+            )
+        )
+        self.assertIs(type(inside_permission), PermissionResultAllow)
+        self.assertIs(type(outside_permission), PermissionResultDeny)
+        self.assertEqual(client.queries, ["Advance the mission."])
+        self.assertTrue(client.disconnected)
+        self.assertEqual(continuations, ["claude-session", "claude-session"])
+        self.assertEqual(turn.continuation_id, "claude-session")
+        self.assertEqual(turn.turn_id, "message-123")
+        self.assertEqual(turn.decision.status, "COMPLETE")
+        self.assertEqual(events[0].event_type, "runtime.claude-code")
+        self.assertEqual(events[0].summary, "Using Bash")
+
+    def test_claude_adapter_interrupts_and_redirects_an_active_turn(self) -> None:
+        class ClaudeAgentOptions:
+            def __init__(self, **values) -> None:
+                self.values = values
+
+        class PermissionResultAllow:
+            def __init__(self, **_values) -> None:
+                pass
+
+        class PermissionResultDeny(PermissionResultAllow):
+            pass
+
+        class AssistantMessage:
+            message_id = None
+
+        class ResultMessage:
+            session_id = "claude-session"
+            stop_reason = "end_turn"
+            result = None
+
+            def __init__(self, *, is_error: bool) -> None:
+                self.is_error = is_error
+                self.structured_output = (
+                    None
+                    if is_error
+                    else {
+                        "summary": "Steering incorporated.",
+                        "status": "COMPLETE",
+                        "current_objective": "Verify the redirected work.",
+                        "next_step": "Present it for review.",
+                        "blocker": "None",
+                    }
+                )
+
+        class ClaudeSDKClient:
+            instance = None
+
+            def __init__(self, _options=None, *, options=None) -> None:
+                self.options = options or _options
+                self.started = asyncio.Event()
+                self.interrupted = asyncio.Event()
+                self.queries: list[str] = []
+                self.round = 0
+                type(self).instance = self
+
+            async def connect(self) -> None:
+                return None
+
+            async def query(self, prompt: str) -> None:
+                self.queries.append(prompt)
+
+            async def receive_response(self):
+                self.round += 1
+                if self.round == 1:
+                    self.started.set()
+                    await self.interrupted.wait()
+                    yield ResultMessage(is_error=True)
+                    return
+                yield ResultMessage(is_error=False)
+
+            async def interrupt(self) -> None:
+                self.interrupted.set()
+
+            async def disconnect(self) -> None:
+                return None
+
+        session = ClaudeCodeAgentSession(
+            config_dir=Path(self.temp_dir.name) / "claude" / "steering",
+            state_root=Path(self.temp_dir.name),
+        )
+        workspace = Path(self.temp_dir.name) / "steering-workspace"
+        workspace.mkdir()
+
+        async def run() -> RuntimeTurn:
+            task = asyncio.create_task(
+                session.run_turn(
+                    prompt="Initial direction.",
+                    workspace=workspace,
+                    continuation_id=None,
+                    runtime_env={},
+                    on_event=lambda _event: None,
+                    on_continuation=lambda _session_id: None,
+                )
+            )
+            while ClaudeSDKClient.instance is None:
+                await asyncio.sleep(0)
+            await ClaudeSDKClient.instance.started.wait()
+            self.assertTrue(await session.steer("Prefer the stronger baseline."))
+            return await task
+
+        with mock.patch.multiple(
+            "claude_agent_sdk",
+            AssistantMessage=AssistantMessage,
+            ClaudeAgentOptions=ClaudeAgentOptions,
+            ClaudeSDKClient=ClaudeSDKClient,
+            PermissionResultAllow=PermissionResultAllow,
+            PermissionResultDeny=PermissionResultDeny,
+            ResultMessage=ResultMessage,
+        ):
+            turn = asyncio.run(run())
+
+        self.assertEqual(turn.decision.summary, "Steering incorporated.")
+        self.assertEqual(len(ClaudeSDKClient.instance.queries), 2)
+        self.assertIn("Prefer the stronger baseline", ClaudeSDKClient.instance.queries[1])
+
     def test_supervisor_owns_thread_and_consumes_guidance_after_success(self) -> None:
         message = self.service.send_message(
             slug="retrieval",
@@ -310,7 +642,7 @@ class CloudRuntimeTests(unittest.TestCase):
             async def run_turn(self, **values):
                 self.prompt = values["prompt"]
                 self.runtime_env = values["runtime_env"]
-                values["on_thread"]("thread-123")
+                values["on_continuation"]("thread-123")
                 return RuntimeTurn(
                     "thread-123",
                     "turn-456",
@@ -333,6 +665,12 @@ class CloudRuntimeTests(unittest.TestCase):
                 return None
 
         session = FakeSession()
+        selected_engines: list[str] = []
+
+        def create_session(_slug: str, engine: str):
+            selected_engines.append(engine)
+            return session
+
         self.service.set_variable(
             slug="retrieval",
             name="SOURCE_URL",
@@ -358,7 +696,7 @@ class CloudRuntimeTests(unittest.TestCase):
             MarkdownExporter(self.service),
             workspace_root=Path(self.temp_dir.name) / "workspaces",
             internal_url="http://127.0.0.1:7433",
-            agent_factory=lambda _slug: session,
+            agent_factory=create_session,
             lease_ttl_seconds=300,
         )
 
@@ -373,7 +711,8 @@ class CloudRuntimeTests(unittest.TestCase):
         pending = self.service.inbox("retrieval", after=0, pending_only=True)
         events = self.service.events("retrieval", after=0, limit=200)
 
-        self.assertEqual(status["challenge"]["coordinator"]["thread_id"], "thread-123")
+        self.assertEqual(status["challenge"]["coordinator"]["continuation_id"], "thread-123")
+        self.assertEqual(selected_engines, ["codex"])
         self.assertEqual(status["challenge"]["coordinator"]["inbox_cursor"], message["sequence"])
         self.assertEqual(pending, [])
         self.assertIn("Prioritize the latency guardrail", session.prompt)
@@ -425,7 +764,13 @@ class CloudRuntimeTests(unittest.TestCase):
                 ciphertext=ciphertext,
             )
 
-        for reserved_name in ("PATH", "LIMINA_INTERNAL_TOKEN", "OPENAI_BASE_URL"):
+        for reserved_name in (
+            "PATH",
+            "LIMINA_INTERNAL_TOKEN",
+            "OPENAI_BASE_URL",
+            "ANTHROPIC_BASE_URL",
+            "CLAUDE_CONFIG_DIR",
+        ):
             with self.assertRaises(InvariantError):
                 self.service.set_variable(
                     slug="retrieval",
@@ -473,6 +818,92 @@ class CloudRuntimeTests(unittest.TestCase):
             ).one()
         self.assertEqual(tuple(wiped), (None, None))
 
+    def test_resource_rotation_restarts_the_turn_with_a_fresh_environment(self) -> None:
+        class RefreshableSession:
+            def __init__(self) -> None:
+                self.started = asyncio.Event()
+                self.interrupted = asyncio.Event()
+                self.environments: list[dict[str, str]] = []
+
+            async def run_turn(self, **values):
+                self.environments.append(dict(values["runtime_env"]))
+                if len(self.environments) == 1:
+                    self.started.set()
+                    await self.interrupted.wait()
+                    raise RuntimeError("resource refresh interrupted the stale turn")
+                values["on_continuation"]("fresh-continuation")
+                return RuntimeTurn(
+                    "fresh-continuation",
+                    "fresh-turn",
+                    RuntimeDecision(
+                        "Used the refreshed resources.",
+                        "COMPLETE",
+                        "Verify resource refresh.",
+                        "Present the result.",
+                        "None",
+                    ),
+                )
+
+            async def steer(self, _message: str) -> bool:
+                return False
+
+            async def interrupt(self) -> bool:
+                if not self.started.is_set():
+                    return False
+                self.interrupted.set()
+                return True
+
+            async def close(self) -> None:
+                return None
+
+        session = RefreshableSession()
+        self.service.change_project_state(
+            slug="retrieval",
+            action="start",
+            actor="owner",
+            command_id=command_id(),
+        )
+        supervisor = ProjectSupervisor(
+            self.service,
+            MarkdownExporter(self.service),
+            workspace_root=Path(self.temp_dir.name) / "workspaces",
+            internal_url="http://127.0.0.1:7433",
+            agent_factory=lambda _slug, _engine: session,
+            lease_ttl_seconds=300,
+        )
+
+        async def run() -> None:
+            await supervisor.ensure_running("retrieval")
+            await session.started.wait()
+            self.service.set_secret(
+                slug="retrieval",
+                name="ROTATED_TOKEN",
+                value="fresh-secret",
+                actor="owner",
+                command_id=command_id(),
+            )
+            await supervisor.submit_message(
+                slug="retrieval",
+                body="Project secret 'ROTATED_TOKEN' was set.",
+                kind="ANSWER",
+                actor="owner",
+                command_id=command_id(),
+                live_delivery=False,
+            )
+            self.assertTrue(await supervisor.refresh_resources("retrieval"))
+            await supervisor._tasks["retrieval"]
+            await supervisor.shutdown()
+
+        asyncio.run(run())
+
+        self.assertNotIn("ROTATED_TOKEN", session.environments[0])
+        self.assertEqual(session.environments[1]["ROTATED_TOKEN"], "fresh-secret")
+        self.assertEqual(self.service.inbox("retrieval", pending_only=True), [])
+        self.assertIn(
+            "runtime.resources_refreshed",
+            [item["type"] for item in self.service.events("retrieval", after=0, limit=200)],
+        )
+
     def test_generated_secret_key_survives_instance_restart(self) -> None:
         key_path = Path(self.temp_dir.name) / "persistent-secret.key"
         with mock.patch.dict(os.environ, {}, clear=True):
@@ -494,7 +925,7 @@ class CloudRuntimeTests(unittest.TestCase):
                 self.steering: list[str] = []
 
             async def run_turn(self, **_values):
-                _values["on_thread"]("thread-live")
+                _values["on_continuation"]("thread-live")
                 self.started.set()
                 await self.finish.wait()
                 return RuntimeTurn(
@@ -524,7 +955,7 @@ class CloudRuntimeTests(unittest.TestCase):
             MarkdownExporter(self.service),
             workspace_root=Path(self.temp_dir.name) / "workspaces",
             internal_url="http://127.0.0.1:7433",
-            agent_factory=lambda _slug: session,
+            agent_factory=lambda _slug, _engine: session,
             lease_ttl_seconds=300,
         )
 
@@ -595,7 +1026,7 @@ class CloudRuntimeTests(unittest.TestCase):
             blocker="None",
             status="RUNNING",
             worker_id="coordinator-a",
-            thread_id="thread-a",
+            continuation_id="thread-a",
             inbox_cursor=0,
             expected_version=1,
             actor="coordinator-a",
@@ -617,7 +1048,7 @@ class CloudRuntimeTests(unittest.TestCase):
                 blocker="None",
                 status="RUNNING",
                 worker_id="coordinator-b",
-                thread_id="thread-b",
+                continuation_id="thread-b",
                 inbox_cursor=0,
                 expected_version=1,
                 actor="coordinator-b",

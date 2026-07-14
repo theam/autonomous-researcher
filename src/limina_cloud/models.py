@@ -41,6 +41,7 @@ class Challenge(Base):
     objective: Mapped[str] = mapped_column(Text, nullable=False)
     context: Mapped[str] = mapped_column(Text, nullable=False, default="")
     success_criteria: Mapped[str] = mapped_column(Text, nullable=False)
+    runtime_engine: Mapped[str] = mapped_column(String(32), nullable=False, default="codex")
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="ACTIVE")
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     created_at: Mapped[datetime] = mapped_column(
@@ -88,7 +89,7 @@ class CoordinatorState(Base):
     next_step: Mapped[str] = mapped_column(Text, nullable=False)
     blocker: Mapped[str] = mapped_column(Text, nullable=False, default="None")
     worker_id: Mapped[str | None] = mapped_column(String(200))
-    thread_id: Mapped[str | None] = mapped_column(String(200))
+    continuation_id: Mapped[str | None] = mapped_column(String(200))
     inbox_cursor: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

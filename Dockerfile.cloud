@@ -10,7 +10,11 @@ COPY src ./src
 COPY alembic.ini ./
 COPY migrations ./migrations
 
-RUN pip install --no-cache-dir ".[codex]"
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends bubblewrap socat \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip install --no-cache-dir ".[runtimes]"
 
 RUN useradd --create-home --uid 10001 limina \
     && mkdir -p /var/lib/limina/workspaces \
@@ -19,7 +23,9 @@ USER limina
 
 ENV LIMINA_DATABASE_URL=sqlite:////var/lib/limina/runtime.db \
     LIMINA_WORKSPACE_ROOT=/var/lib/limina/workspaces \
-    LIMINA_SECRET_KEY_PATH=/var/lib/limina/secret.key
+    CODEX_HOME=/var/lib/limina/codex \
+    LIMINA_CLAUDE_CONFIG_DIR=/var/lib/limina/claude \
+    LIMINA_CLAUDE_WEAKER_NESTED_SANDBOX=1
 
 EXPOSE 7433
 VOLUME ["/var/lib/limina"]

@@ -1,62 +1,70 @@
-# Limina cloud CLI
+# Limina CLI user story
 
-## The user story
+I create a project by telling Limina what outcome matters, what success means, which managed engine
+to use, and what context it should respect. I grant named resources. I start the project and leave;
+Limina owns the Codex or Claude Code runtime and continues from durable state.
 
-I create a project by telling Limina what outcome matters, what success means, and what context it
-should respect. I grant it named resources. I start it and leave; Limina owns the Codex runtime and
-continues from durable state.
+Later I review what it established, steer it asynchronously, or enter the live project and watch it
+work. I type normal strategic guidance. I never select a thread, recover a session, dispatch a
+subagent, claim a lease, or write a checkpoint.
 
-Later I can review what it has established, give feedback asynchronously, or enter the live
-project and watch it work. Inside the live view I type normal strategic guidance. I never select a
-thread, recover a session, dispatch a subagent, claim a lease, or write a checkpoint.
+## Start one server
 
-## Start an instance with one Docker command
-
-Configure the two instance credentials once in `.env`:
+Configure an instance token and at least one engine credential in `.env`:
 
 ```dotenv
-OPENAI_API_KEY=...
 LIMINA_API_TOKEN=replace-with-a-long-random-value
+OPENAI_API_KEY=...       # when using Codex
+ANTHROPIC_API_KEY=...    # when using Claude Code
 ```
 
-Then the complete single-instance server starts with:
+Then start the complete single-instance server:
 
 ```bash
 docker compose up --build
 ```
 
-The named `limina-data` volume preserves the SQLite database, Codex workspaces, and the generated
-secret-encryption key across container replacement. No database container or migration command is
-needed for this mode; the image applies schema migrations before starting the server.
+The `limina-data` volume preserves SQLite, project workspaces, both providers' private continuation
+stores, provider continuation pointers, and the encryption key. The image applies schema
+migrations before serving; there is no separate database or runtime command in this mode.
 
-The direct Python development path remains available:
+The direct development path is:
 
 ```bash
-uv sync --extra codex
+uv sync --extra runtimes
 export LIMINA_API_TOKEN=local-secret
 uv run limina serve
 ```
 
-For a PostgreSQL-backed deployment or future horizontal replicas:
+For PostgreSQL:
 
 ```bash
-export LIMINA_API_TOKEN=local-secret
-export OPENAI_API_KEY=...
 docker compose -f compose.cloud.yaml up --build
 ```
 
-All following commands use `LIMINA_URL` (default `http://127.0.0.1:7433`) and
-`LIMINA_API_TOKEN`.
+All commands use `LIMINA_URL` (default `http://127.0.0.1:7433`), `LIMINA_API_TOKEN`, and the
+optional attribution identity `LIMINA_ACTOR`.
 
-## Create and resource a project
+## Choose a runtime
 
 ```bash
 limina project create retrieval \
+  --runtime claude-code \
   --name "Retrieval quality" \
   --mission "Improve multilingual product retrieval" \
   --success "Increase held-out NDCG by 10% without a P95 latency regression" \
   --context "The current baseline is hybrid BM25 plus embeddings"
+```
 
+Valid values are `codex` and `claude-code`; `codex` is the default. `limina doctor` reports what
+the server supports, and `project show`/`project list` show each project's selection.
+
+A project's runtime cannot be changed. Create a separate project for an engine comparison or a
+fresh continuation. Users choose the product-level engine, not its model session.
+
+## Provide variables and secrets
+
+```bash
 limina resource variable retrieval SOURCE_REPO_URL https://github.com/acme/search
 limina resource variable retrieval EVAL_SET_URI s3://research/eval-v3.parquet
 
@@ -66,16 +74,13 @@ limina resource secret retrieval AWS_SESSION_TOKEN --from-env AWS_SESSION_TOKEN
 limina resource list retrieval
 ```
 
-Variables are visible configuration and resource references. Secrets are write-only: omit
-`--from-env` for a hidden confirmation prompt, or use `--from-stdin` in automation. Limina encrypts
-them before database persistence, never returns their values, and injects both types only into the
-managed runtime for that project. Use TLS whenever the API is reachable beyond localhost.
+Variables are visible configuration. Secrets are encrypted and write-only: omit `--from-env` for
+a hidden confirmation prompt, or use `--from-stdin` in automation. Limina injects both only into
+the selected runtime for that project. A change during active work is committed, then Limina
+restarts the managed turn with a freshly materialized environment. Use TLS whenever the API is
+reachable beyond localhost.
 
-When upgrading the earlier prototype schema, existing resource URIs become uppercase-named
-variables. Re-add any former `--credential-env` bindings once with `resource secret`; secret values
-were never stored in the old schema and therefore cannot be migrated automatically.
-
-## Start it and leave it running
+## Start and leave it running
 
 ```bash
 limina start retrieval
@@ -83,8 +88,8 @@ limina status retrieval
 limina watch retrieval
 ```
 
-`watch` follows the durable activity stream. `Ctrl-C` stops watching; it does not stop the
-project.
+`watch` follows durable activity. `Ctrl-C` stops watching; it does not stop the project. Limina
+recovers active projects after a server restart and resumes their private provider continuation.
 
 ## Steer asynchronously
 
@@ -93,8 +98,9 @@ limina steer retrieval "The latency guardrail is more important than the 10% tar
 limina steer retrieval "Approved to spend up to $100 on the larger evaluation." --kind APPROVAL
 ```
 
-Limina commits guidance before delivery. If a turn is active, it also delivers the message inside
-that turn. Otherwise it wakes the project and supplies the guidance to its next managed turn.
+Limina commits guidance before attempting live delivery. Codex accepts active-turn steering.
+Claude Code is interrupted and immediately redirected inside the same session. Otherwise the
+message remains pending and wakes the next managed turn.
 
 ## Enter the live project
 
@@ -102,8 +108,7 @@ that turn. Otherwise it wakes the project and supplies the guidance to its next 
 limina attach retrieval
 ```
 
-The terminal first shows the current project state, replays subsequent durable activity, and then
-accepts direct feedback:
+The terminal shows current state, follows durable activity, and accepts direct feedback:
 
 ```text
 limina> Compare against the cross-encoder baseline before drawing a conclusion.
@@ -113,15 +118,15 @@ limina> /interrupt
 limina> /detach
 ```
 
-- plain text steers the active turn, or queues durably if the turn just ended;
+- plain text steers active work or queues durably if the turn ended;
 - `/pause`, `/resume`, and `/stop` change project lifecycle;
-- `/interrupt` interrupts the active turn and pauses the project;
-- `/detach` only leaves the view; execution continues.
+- `/interrupt` interrupts active work and pauses the project;
+- `/detach` leaves the view while execution continues.
 
 Several teammates may attach simultaneously. Each sees the same persisted event sequence, and
 each message carries their `--actor`/`LIMINA_ACTOR` identity.
 
-## Review knowledge
+## Review accepted knowledge
 
 ```bash
 limina review retrieval
@@ -129,9 +134,9 @@ limina review retrieval --artifact F003
 limina export retrieval ./retrieval-kb
 ```
 
-The summary groups hypotheses, experiments, and findings. Opening an artifact shows its accepted
-content and evidence. Export produces the validator-compatible Markdown KB for offline review,
-Obsidian, archival, or a Git review branch.
+Review groups hypotheses, experiments, and findings. Opening an artifact shows accepted content
+and evidence. Export creates a validator-compatible Markdown KB for offline review, Obsidian,
+archival, or a Git review branch.
 
 ## Manage projects
 
@@ -144,24 +149,23 @@ limina stop retrieval
 limina project archive retrieval
 ```
 
-Stopping and archiving never delete knowledge. Archive requires the project not to be actively
-running.
+Stopping and archiving never delete knowledge. Archive requires the project to be inactive.
 
 ## Machine-readable use
 
-All non-interactive public commands support global `--json`:
+Non-interactive public commands support global `--json`:
 
 ```bash
-limina --json status retrieval | jq '.project.status'
+limina --json project show retrieval | jq '{runtime, status, next_step}'
 limina --json review retrieval | jq '.findings[] | {id, title}'
 ```
 
-`attach` is intentionally interactive and rejects `--json`; use `watch --no-follow --json` for
-event consumers.
+`attach` is interactive and rejects `--json`; event consumers should use
+`watch --no-follow --json`.
 
 ## What users never operate
 
-Limina contains a hidden project-scoped command protocol so its managed Codex runtime can commit
+Limina contains a hidden, project-scoped command protocol so either managed runtime can commit
 H → E → F artifacts safely. It is omitted from public help and OpenAPI, protected by a short-lived
-capability, and not part of the user workflow. If a human finds themselves managing sessions,
-threads, workers, subagents, leases, versions, or checkpoints, the abstraction has failed.
+capability, and not part of the user workflow. If a human is managing sessions, threads, workers,
+subagents, leases, versions, or checkpoints, the abstraction has failed.

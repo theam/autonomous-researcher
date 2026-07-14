@@ -1,4 +1,4 @@
-"""Project-owned Codex runtime and durable supervisor.
+"""Project-owned agent runtimes and durable supervisor.
 
 Users operate projects. This module owns every session, turn, lease, retry,
 workspace, and checkpoint needed to keep those projects running.
@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Protocol
 from uuid import uuid4
 
+from .engines import RuntimeEngine
 from .errors import AuthenticationError, LeaseConflictError, LiminaError, TransportError
 from .exporter import MarkdownExporter
 from .service import ChallengeService
@@ -35,18 +36,12 @@ TURN_OUTPUT_SCHEMA: dict[str, Any] = {
     "required": ["summary", "status", "current_objective", "next_step", "blocker"],
 }
 
-SAFE_CODEX_ENV = frozenset(
+SAFE_PROCESS_ENV = frozenset(
     {
         "HOME",
         "LANG",
         "LC_ALL",
         "LOGNAME",
-        "OPENAI_API_KEY",
-        "CODEX_API_KEY",
-        "CODEX_CI",
-        "CODEX_INTERNAL_ORIGINATOR_OVERRIDE",
-        "CODEX_PERMISSION_PROFILE",
-        "CODEX_SHELL",
         "COLORTERM",
         "PATH",
         "SHELL",
@@ -56,16 +51,58 @@ SAFE_CODEX_ENV = frozenset(
         "USER",
     }
 )
+SAFE_CODEX_ENV = SAFE_PROCESS_ENV | {
+    "OPENAI_API_KEY",
+    "CODEX_API_KEY",
+    "CODEX_HOME",
+    "CODEX_CI",
+    "CODEX_INTERNAL_ORIGINATOR_OVERRIDE",
+    "CODEX_PERMISSION_PROFILE",
+    "CODEX_SHELL",
+}
+SAFE_CLAUDE_ENV = SAFE_PROCESS_ENV | {
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "ANTHROPIC_BASE_URL",
+    "CLAUDE_CODE_USE_BEDROCK",
+    "CLAUDE_CODE_USE_FOUNDRY",
+    "CLAUDE_CODE_USE_VERTEX",
+}
+
+
+def _isolated_environment(
+    safe_names: frozenset[str] | set[str], runtime_env: dict[str, str]
+) -> dict[str, str]:
+    """Build a child environment without inheriting control-plane secrets."""
+    env = {name: "" for name in os.environ if name not in safe_names}
+    env.update({name: value for name, value in os.environ.items() if name in safe_names})
+    env.update(runtime_env)
+    return env
 
 
 def _codex_environment(runtime_env: dict[str, str]) -> dict[str, str]:
-    """Build a child environment without inheriting control-plane secrets."""
     # The SDK starts app-server from a copy of the parent environment and then
     # overlays CodexConfig.env. Empty every unapproved value explicitly.
-    env = {name: "" for name in os.environ if name not in SAFE_CODEX_ENV}
-    env.update({name: value for name, value in os.environ.items() if name in SAFE_CODEX_ENV})
-    env.update(runtime_env)
+    return _isolated_environment(SAFE_CODEX_ENV, runtime_env)
+
+
+def _claude_environment(runtime_env: dict[str, str], config_dir: Path) -> dict[str, str]:
+    env = _isolated_environment(SAFE_CLAUDE_ENV, runtime_env)
+    env["CLAUDE_CONFIG_DIR"] = str(config_dir)
+    env["CLAUDE_CODE_SUBPROCESS_ENV_SCRUB"] = "1"
     return env
+
+
+def _claude_settings_path(config_dir: Path) -> Path:
+    """Keep resumable sessions well beyond Claude Code's interactive default."""
+    config_dir.mkdir(parents=True, exist_ok=True)
+    config_dir.chmod(0o700)
+    path = config_dir / "limina-settings.json"
+    content = json.dumps({"cleanupPeriodDays": 3650}, sort_keys=True) + "\n"
+    if not path.exists() or path.read_text(encoding="utf-8") != content:
+        path.write_text(content, encoding="utf-8")
+    path.chmod(0o600)
+    return path
 
 
 @dataclass(frozen=True)
@@ -79,7 +116,7 @@ class RuntimeDecision:
 
 @dataclass(frozen=True)
 class RuntimeTurn:
-    thread_id: str
+    continuation_id: str
     turn_id: str
     decision: RuntimeDecision
 
@@ -89,6 +126,25 @@ class RuntimeEvent:
     event_type: str
     summary: str
     detail: dict[str, Any]
+
+
+def _parse_runtime_decision(response: str | dict[str, Any], *, provider: str) -> RuntimeDecision:
+    try:
+        value = json.loads(response) if isinstance(response, str) else response
+        decision = RuntimeDecision(
+            summary=str(value["summary"]).strip(),
+            status=str(value["status"]).upper(),
+            current_objective=str(value["current_objective"]).strip(),
+            next_step=str(value["next_step"]).strip(),
+            blocker=str(value["blocker"]).strip() or "None",
+        )
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise TransportError(f"{provider} returned an invalid project checkpoint.") from exc
+    if decision.status not in {"RUNNING", "WAITING", "COMPLETE"}:
+        raise TransportError(f"{provider} returned unsupported project status '{decision.status}'.")
+    if not decision.summary or not decision.current_objective or not decision.next_step:
+        raise TransportError(f"{provider} returned an incomplete project checkpoint.")
+    return decision
 
 
 def _redact_text(value: str, secret_values: tuple[str, ...]) -> str:
@@ -119,7 +175,7 @@ def _redact_event(event: RuntimeEvent, secret_values: tuple[str, ...]) -> Runtim
 def _redact_turn(turn: RuntimeTurn, secret_values: tuple[str, ...]) -> RuntimeTurn:
     decision = turn.decision
     return RuntimeTurn(
-        thread_id=turn.thread_id,
+        continuation_id=turn.continuation_id,
         turn_id=turn.turn_id,
         decision=RuntimeDecision(
             summary=_redact_text(decision.summary, secret_values),
@@ -132,7 +188,7 @@ def _redact_turn(turn: RuntimeTurn, secret_values: tuple[str, ...]) -> RuntimeTu
 
 
 EventSink = Callable[[RuntimeEvent], None]
-ThreadSink = Callable[[str], None]
+ContinuationSink = Callable[[str], None]
 
 
 class AgentSession(Protocol):
@@ -141,10 +197,10 @@ class AgentSession(Protocol):
         *,
         prompt: str,
         workspace: Path,
-        thread_id: str | None,
+        continuation_id: str | None,
         runtime_env: dict[str, str],
         on_event: EventSink,
-        on_thread: ThreadSink,
+        on_continuation: ContinuationSink,
     ) -> RuntimeTurn: ...
 
     async def steer(self, message: str) -> bool: ...
@@ -154,7 +210,11 @@ class AgentSession(Protocol):
     async def close(self) -> None: ...
 
 
-AgentFactory = Callable[[str], AgentSession]
+AgentFactory = Callable[[str, RuntimeEngine], AgentSession]
+
+
+class _RuntimeRefreshRequested(Exception):
+    """Abort a turn so changed project resources can be materialized safely."""
 
 
 class CodexAgentSession:
@@ -171,29 +231,29 @@ class CodexAgentSession:
         *,
         prompt: str,
         workspace: Path,
-        thread_id: str | None,
+        continuation_id: str | None,
         runtime_env: dict[str, str],
         on_event: EventSink,
-        on_thread: ThreadSink,
+        on_continuation: ContinuationSink,
     ) -> RuntimeTurn:
         return await asyncio.to_thread(
             self._run_turn_sync,
             prompt,
             workspace,
-            thread_id,
+            continuation_id,
             runtime_env,
             on_event,
-            on_thread,
+            on_continuation,
         )
 
     def _run_turn_sync(
         self,
         prompt: str,
         workspace: Path,
-        thread_id: str | None,
+        continuation_id: str | None,
         runtime_env: dict[str, str],
         on_event: EventSink,
-        on_thread: ThreadSink,
+        on_continuation: ContinuationSink,
     ) -> RuntimeTurn:
         try:
             from openai_codex import Codex, CodexConfig, Sandbox
@@ -227,9 +287,9 @@ class CodexAgentSession:
                     config_overrides=config_overrides,
                 )
             ) as codex:
-                if thread_id:
+                if continuation_id:
                     thread = codex.thread_resume(
-                        thread_id,
+                        continuation_id,
                         cwd=str(workspace),
                         model=self.model,
                         sandbox=selected_sandbox,
@@ -240,7 +300,7 @@ class CodexAgentSession:
                         model=self.model,
                         sandbox=selected_sandbox,
                     )
-                on_thread(thread.id)
+                on_continuation(thread.id)
                 handle = thread.turn(prompt, output_schema=TURN_OUTPUT_SCHEMA)
                 with self._handle_lock:
                     self._handle = handle
@@ -257,17 +317,17 @@ class CodexAgentSession:
         except Exception as exc:
             raise TransportError(
                 "The managed Codex turn failed before Limina accepted its checkpoint.",
-                reason=str(exc),
-                thread_id=thread_id,
+                reason=_redact_text(str(exc), tuple(runtime_env.values())),
+                continuation_id=continuation_id,
             ) from exc
 
         if not result.final_response:
             raise TransportError(
                 "Codex completed without the required project decision.",
-                thread_id=thread.id,
+                continuation_id=thread.id,
                 turn_id=result.id,
             )
-        decision = self._parse_decision(result.final_response)
+        decision = _parse_runtime_decision(result.final_response, provider="Codex")
         return RuntimeTurn(thread.id, result.id, decision)
 
     @staticmethod
@@ -277,28 +337,6 @@ class CodexAgentSession:
             if mapped is not None:
                 on_event(mapped)
             yield event
-
-    @staticmethod
-    def _parse_decision(response: str) -> RuntimeDecision:
-        try:
-            value = json.loads(response)
-            decision = RuntimeDecision(
-                summary=str(value["summary"]).strip(),
-                status=str(value["status"]).upper(),
-                current_objective=str(value["current_objective"]).strip(),
-                next_step=str(value["next_step"]).strip(),
-                blocker=str(value["blocker"]).strip() or "None",
-            )
-        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
-            raise TransportError(
-                "Codex returned an invalid project checkpoint.",
-                response=response[:1000],
-            ) from exc
-        if decision.status not in {"RUNNING", "WAITING", "COMPLETE"}:
-            raise TransportError(f"Codex returned unsupported project status '{decision.status}'.")
-        if not decision.summary or not decision.current_objective or not decision.next_step:
-            raise TransportError("Codex returned an incomplete project checkpoint.")
-        return decision
 
     async def steer(self, message: str) -> bool:
         def steer_active_turn() -> bool:
@@ -324,6 +362,260 @@ class CodexAgentSession:
 
     async def close(self) -> None:
         await self.interrupt()
+
+
+class ClaudeCodeAgentSession:
+    """Claude Agent SDK adapter with resumable, Limina-owned session state."""
+
+    def __init__(
+        self,
+        *,
+        config_dir: Path,
+        state_root: Path,
+        model: str | None = None,
+        weaker_nested_sandbox: bool = False,
+    ) -> None:
+        self.config_dir = config_dir
+        self.state_root = state_root
+        self.model = model or None
+        self.weaker_nested_sandbox = weaker_nested_sandbox
+        self._client: Any | None = None
+        self._active = False
+        self._query_active = False
+        self._stop_requested = False
+        self._steering: asyncio.Queue[str] = asyncio.Queue()
+
+    async def run_turn(
+        self,
+        *,
+        prompt: str,
+        workspace: Path,
+        continuation_id: str | None,
+        runtime_env: dict[str, str],
+        on_event: EventSink,
+        on_continuation: ContinuationSink,
+    ) -> RuntimeTurn:
+        try:
+            from claude_agent_sdk import (
+                AssistantMessage,
+                ClaudeAgentOptions,
+                ClaudeSDKClient,
+                PermissionResultAllow,
+                PermissionResultDeny,
+                ResultMessage,
+            )
+        except ImportError as exc:
+            raise TransportError(
+                "The Limina runtime image does not include the Claude Agent SDK.",
+                suggestion="Install the project with the 'claude' extra.",
+            ) from exc
+
+        settings_path = _claude_settings_path(self.config_dir)
+        workspace_root = workspace.resolve()
+        protected_roots = sorted(
+            {
+                str(self.state_root.resolve()),
+                str(self.config_dir.parent.resolve()),
+            }
+        )
+
+        async def can_use_tool(tool_name: str, input_data: dict[str, Any], _context: Any) -> Any:
+            if tool_name == "Bash" and input_data.get("dangerouslyDisableSandbox"):
+                return PermissionResultDeny(
+                    message="Limina does not permit commands outside the project sandbox.",
+                    interrupt=False,
+                )
+            path_key = {
+                "Read": "file_path",
+                "Write": "file_path",
+                "Edit": "file_path",
+                "NotebookEdit": "notebook_path",
+                "Glob": "path",
+                "Grep": "path",
+            }.get(tool_name)
+            if path_key and (raw_path := input_data.get(path_key)):
+                candidate = Path(str(raw_path))
+                if not candidate.is_absolute():
+                    candidate = workspace_root / candidate
+                try:
+                    candidate.resolve().relative_to(workspace_root)
+                except (OSError, RuntimeError, ValueError):
+                    return PermissionResultDeny(
+                        message="Limina restricts file access to this project's workspace.",
+                        interrupt=False,
+                    )
+            return PermissionResultAllow(updated_input=input_data)
+
+        options = ClaudeAgentOptions(
+            tools={"type": "preset", "preset": "claude_code"},
+            system_prompt={"type": "preset", "preset": "claude_code"},
+            permission_mode="default",
+            can_use_tool=can_use_tool,
+            sandbox={
+                "enabled": True,
+                "failIfUnavailable": True,
+                "autoAllowBashIfSandboxed": True,
+                "allowUnsandboxedCommands": False,
+                "enableWeakerNestedSandbox": self.weaker_nested_sandbox,
+                "filesystem": {
+                    "denyRead": protected_roots,
+                    "allowRead": [str(workspace_root)],
+                },
+            },
+            setting_sources=[],
+            cwd=workspace,
+            settings=str(settings_path),
+            env=_claude_environment(runtime_env, self.config_dir),
+            resume=continuation_id,
+            model=self.model,
+            output_format={"type": "json_schema", "schema": TURN_OUTPUT_SCHEMA},
+        )
+        client = ClaudeSDKClient(options=options)
+        self._client = client
+        self._active = True
+        self._stop_requested = False
+        try:
+            await client.connect()
+            next_prompt = prompt
+            while True:
+                self._query_active = True
+                try:
+                    await client.query(next_prompt)
+                    result: Any | None = None
+                    turn_id: str | None = None
+                    async for message in client.receive_response():
+                        session_id = _claude_session_id(message)
+                        if session_id:
+                            on_continuation(session_id)
+                        if isinstance(message, AssistantMessage) and message.message_id:
+                            turn_id = message.message_id
+                        if isinstance(message, ResultMessage):
+                            result = message
+                        mapped = _map_claude_message(message)
+                        if mapped is not None:
+                            on_event(mapped)
+                finally:
+                    self._query_active = False
+
+                steering = self._drain_steering()
+                if steering and not self._stop_requested:
+                    next_prompt = (
+                        "Human steering arrived while you were working. Incorporate it now and "
+                        "continue the same Limina checkpoint:\n\n- " + "\n- ".join(steering)
+                    )
+                    continue
+                if self._stop_requested:
+                    raise TransportError(
+                        "The managed Claude Code turn was interrupted before checkpointing."
+                    )
+                if result is None:
+                    raise TransportError(
+                        "Claude Code completed without returning a terminal result."
+                    )
+                if result.is_error:
+                    raise TransportError(
+                        "The managed Claude Code turn failed before Limina accepted "
+                        "its checkpoint.",
+                        stop_reason=result.stop_reason,
+                    )
+                response = result.structured_output or result.result
+                if response is None:
+                    raise TransportError(
+                        "Claude Code completed without the required project decision."
+                    )
+                decision = _parse_runtime_decision(response, provider="Claude Code")
+                return RuntimeTurn(
+                    continuation_id=result.session_id,
+                    turn_id=turn_id or str(uuid4()),
+                    decision=decision,
+                )
+        except LiminaError:
+            raise
+        except Exception as exc:
+            raise TransportError(
+                "The managed Claude Code turn failed before Limina accepted its checkpoint.",
+                reason=_redact_text(str(exc), tuple(runtime_env.values())),
+                continuation_id=continuation_id,
+            ) from exc
+        finally:
+            self._active = False
+            self._query_active = False
+            self._client = None
+            with suppress(Exception):
+                await client.disconnect()
+
+    async def steer(self, message: str) -> bool:
+        client = self._client
+        if client is None or not self._query_active or self._stop_requested:
+            return False
+        await self._steering.put(message)
+        with suppress(Exception):
+            await client.interrupt()
+        return True
+
+    async def interrupt(self) -> bool:
+        client = self._client
+        if client is None or not self._active:
+            return False
+        self._stop_requested = True
+        await client.interrupt()
+        return True
+
+    async def close(self) -> None:
+        client = self._client
+        if client is None:
+            return
+        with suppress(Exception):
+            await self.interrupt()
+        with suppress(Exception):
+            await client.disconnect()
+
+    def _drain_steering(self) -> list[str]:
+        messages: list[str] = []
+        while True:
+            try:
+                messages.append(self._steering.get_nowait())
+            except asyncio.QueueEmpty:
+                return messages
+
+
+def _claude_session_id(message: Any) -> str | None:
+    session_id = getattr(message, "session_id", None)
+    if session_id:
+        return str(session_id)
+    data = getattr(message, "data", None)
+    if isinstance(data, dict) and data.get("session_id"):
+        return str(data["session_id"])
+    return None
+
+
+def _map_claude_message(message: Any) -> RuntimeEvent | None:
+    message_type = type(message).__name__
+    if message_type == "AssistantMessage":
+        blocks = getattr(message, "content", [])
+        for block in blocks:
+            block_type = type(block).__name__
+            if block_type == "ToolUseBlock":
+                tool_name = str(getattr(block, "name", "tool"))
+                return RuntimeEvent(
+                    event_type="runtime.claude-code",
+                    summary=f"Using {tool_name}",
+                    detail={"method": "tool/use", "item_type": tool_name},
+                )
+            if block_type == "TextBlock" and (text := str(getattr(block, "text", "")).strip()):
+                return RuntimeEvent(
+                    event_type="runtime.claude-code",
+                    summary=text[:1000],
+                    detail={"method": "assistant/message", "item_type": "text"},
+                )
+    if message_type in {"TaskStartedMessage", "TaskProgressMessage", "TaskNotificationMessage"}:
+        description = str(getattr(message, "description", message_type))
+        return RuntimeEvent(
+            event_type="runtime.claude-code",
+            summary=description[:1000],
+            detail={"method": "task/progress", "item_type": message_type},
+        )
+    return None
 
 
 def _map_codex_notification(notification: Any) -> RuntimeEvent | None:
@@ -373,12 +665,7 @@ class ProjectSupervisor:
         self.exporter = exporter
         self.workspace_root = workspace_root
         self.internal_url = internal_url.rstrip("/")
-        self.agent_factory = agent_factory or (
-            lambda _slug: CodexAgentSession(
-                model=os.environ.get("LIMINA_CODEX_MODEL", "gpt-5.4"),
-                sandbox=os.environ.get("LIMINA_CODEX_SANDBOX", "workspace-write"),
-            )
-        )
+        self.agent_factory = agent_factory or self._default_agent_factory
         self.poll_interval = poll_interval
         self.lease_ttl_seconds = lease_ttl_seconds
         self.runtime_id = f"limina:{os.getpid()}:{uuid4().hex[:8]}"
@@ -387,8 +674,31 @@ class ProjectSupervisor:
         self._wake: dict[str, asyncio.Event] = {}
         self._live_messages: dict[str, list[dict[str, Any]]] = {}
         self._lease_lost: dict[str, asyncio.Event] = {}
+        self._resource_refresh: dict[str, asyncio.Event] = {}
         self._capabilities: dict[str, tuple[str, str]] = {}
         self._closed = False
+
+    def _default_agent_factory(self, slug: str, engine: RuntimeEngine) -> AgentSession:
+        if engine == "codex":
+            return CodexAgentSession(
+                model=os.environ.get("LIMINA_CODEX_MODEL", "gpt-5.4"),
+                sandbox=os.environ.get("LIMINA_CODEX_SANDBOX", "workspace-write"),
+            )
+        if engine != "claude-code":
+            raise TransportError(f"Unsupported managed runtime engine '{engine}'.")
+        config_root = Path(
+            os.environ.get(
+                "LIMINA_CLAUDE_CONFIG_DIR",
+                str(self.workspace_root.parent / "claude"),
+            )
+        )
+        return ClaudeCodeAgentSession(
+            config_dir=config_root / slug,
+            state_root=self.workspace_root.parent,
+            model=os.environ.get("LIMINA_CLAUDE_MODEL") or None,
+            weaker_nested_sandbox=os.environ.get("LIMINA_CLAUDE_WEAKER_NESTED_SANDBOX", "").lower()
+            in {"1", "true", "yes"},
+        )
 
     async def recover(self) -> None:
         for project in self.service.list_projects():
@@ -412,6 +722,7 @@ class ProjectSupervisor:
         kind: str,
         actor: str,
         command_id: str | None = None,
+        live_delivery: bool = True,
     ) -> dict[str, Any]:
         message = self.service.send_message(
             slug=slug,
@@ -422,7 +733,7 @@ class ProjectSupervisor:
         )
         session = self._sessions.get(slug)
         live = False
-        if session is not None:
+        if live_delivery and session is not None:
             if kind == "INTERRUPT":
                 live = await session.interrupt()
             else:
@@ -431,6 +742,23 @@ class ProjectSupervisor:
             self._live_messages.setdefault(slug, []).append(message)
         self._wake_for(slug).set()
         return {"message": message, "delivery": "LIVE" if live else "QUEUED"}
+
+    async def refresh_resources(self, slug: str) -> bool:
+        """Restart active work so its child environment reflects resource changes."""
+        session = self._sessions.get(slug)
+        if session is None:
+            self._wake_for(slug).set()
+            return False
+        refresh = self._resource_refresh_for(slug)
+        refresh.set()
+        try:
+            interrupted = await session.interrupt()
+        except Exception:
+            interrupted = True
+        if not interrupted:
+            refresh.clear()
+        self._wake_for(slug).set()
+        return interrupted
 
     async def interrupt(self, slug: str, *, actor: str, reason: str) -> dict[str, Any]:
         delivery = await self.submit_message(
@@ -466,9 +794,14 @@ class ProjectSupervisor:
                 await session.close()
         self._tasks.clear()
         self._sessions.clear()
+        self._resource_refresh.clear()
 
     async def _run_project(self, slug: str) -> None:
-        session = self._sessions.setdefault(slug, self.agent_factory(slug))
+        project = self.service.get_challenge(slug)
+        session = self._sessions.setdefault(
+            slug,
+            self.agent_factory(slug, project["runtime_engine"]),
+        )
         while not self._closed:
             status = self.service.status(slug)
             coordinator = status["challenge"]["coordinator"]
@@ -482,6 +815,9 @@ class ProjectSupervisor:
                 continue
             try:
                 await self._run_turn(slug, session)
+            except _RuntimeRefreshRequested:
+                self._complete_resource_refresh(slug)
+                continue
             except LeaseConflictError:
                 await asyncio.sleep(self.poll_interval)
             except asyncio.CancelledError:
@@ -489,6 +825,7 @@ class ProjectSupervisor:
             except Exception as exc:
                 current = self.service.get_challenge(slug)["coordinator"]
                 if current["status"] in {"PAUSED", "STOPPED"}:
+                    self._resource_refresh.pop(slug, None)
                     self._runtime_event(
                         slug,
                         RuntimeEvent(
@@ -498,6 +835,9 @@ class ProjectSupervisor:
                         ),
                     )
                     return
+                if self._resource_refresh_for(slug).is_set():
+                    self._complete_resource_refresh(slug)
+                    continue
                 error_detail = dict(exc.details) if isinstance(exc, LiminaError) else {}
                 error_detail["error"] = exc.message if isinstance(exc, LiminaError) else str(exc)
                 self._runtime_event(
@@ -518,7 +858,7 @@ class ProjectSupervisor:
                             blocker=str(error_detail.get("reason") or error_detail["error"]),
                             status="FAILED",
                             worker_id=None,
-                            thread_id=latest["thread_id"],
+                            continuation_id=latest["continuation_id"],
                             inbox_cursor=latest["inbox_cursor"],
                             expected_version=latest["version"],
                             actor=self.runtime_id,
@@ -565,17 +905,21 @@ class ProjectSupervisor:
             turn = await session.run_turn(
                 prompt=self._prompt(slug, files, resources, messages),
                 workspace=workspace,
-                thread_id=coordinator["thread_id"],
+                continuation_id=coordinator["continuation_id"],
                 runtime_env=self._runtime_env(slug, resource_environment, capability),
                 on_event=lambda event: self._runtime_event(
                     slug, _redact_event(event, secret_values)
                 ),
-                on_thread=lambda thread_id: self._bind_thread(slug, thread_id),
+                on_continuation=lambda continuation_id: self._bind_continuation(
+                    slug, continuation_id
+                ),
             )
             turn = _redact_turn(turn, secret_values)
+            if self._resource_refresh_for(slug).is_set():
+                raise _RuntimeRefreshRequested
             if self._lease_lost_for(slug).is_set():
                 raise LeaseConflictError(
-                    "The project runtime lost ownership while the Codex turn was active.",
+                    "The project runtime lost ownership while the managed turn was active.",
                     project=slug,
                 )
 
@@ -605,7 +949,7 @@ class ProjectSupervisor:
                 blocker=blocker,
                 status=checkpoint_status,
                 worker_id=self.runtime_id,
-                thread_id=turn.thread_id,
+                continuation_id=turn.continuation_id,
                 inbox_cursor=cursor,
                 expected_version=latest["version"],
                 acknowledge_message_ids=list(accepted_messages),
@@ -668,10 +1012,10 @@ class ProjectSupervisor:
             command_id=str(uuid4()),
         )
 
-    def _bind_thread(self, slug: str, thread_id: str) -> None:
+    def _bind_continuation(self, slug: str, continuation_id: str) -> None:
         """Persist SDK continuity before any tools run; never expose it publicly."""
         coordinator = self.service.get_challenge(slug)["coordinator"]
-        if coordinator["thread_id"] == thread_id:
+        if coordinator["continuation_id"] == continuation_id:
             return
         self.service.checkpoint_coordinator(
             slug=slug,
@@ -680,7 +1024,7 @@ class ProjectSupervisor:
             blocker=coordinator["blocker"],
             status=coordinator["status"],
             worker_id=self.runtime_id,
-            thread_id=thread_id,
+            continuation_id=continuation_id,
             inbox_cursor=coordinator["inbox_cursor"],
             expected_version=coordinator["version"],
             actor=self.runtime_id,
@@ -728,6 +1072,20 @@ class ProjectSupervisor:
     def _lease_lost_for(self, slug: str) -> asyncio.Event:
         return self._lease_lost.setdefault(slug, asyncio.Event())
 
+    def _resource_refresh_for(self, slug: str) -> asyncio.Event:
+        return self._resource_refresh.setdefault(slug, asyncio.Event())
+
+    def _complete_resource_refresh(self, slug: str) -> None:
+        self._resource_refresh.pop(slug, None)
+        self._runtime_event(
+            slug,
+            RuntimeEvent(
+                "runtime.resources_refreshed",
+                "Restarting the managed turn with updated project resources.",
+                {},
+            ),
+        )
+
     @staticmethod
     def _prompt(
         slug: str,
@@ -756,9 +1114,9 @@ class ProjectSupervisor:
         return f"""You are Limina, the autonomous research runtime for project `{slug}`.
 
 Own the project. The user is not responsible for sessions, subagents, thread recovery, experiment
-leases, or checkpoints. Advance one substantive research checkpoint toward the mission. Use
-Codex subagents internally when independent work benefits from parallelism. Use the hidden
-`limina _agent ...` commands for durable hypotheses, experiments, observations, and findings;
+leases, or checkpoints. Advance one substantive research checkpoint toward the mission. Use the
+selected engine's subagents internally when independent work benefits from parallelism. Use the
+hidden `limina _agent ...` commands for durable hypotheses, experiments, observations, and findings;
 start with `limina _agent status` and inspect help only for the specific command you need. Do not
 invoke or inspect a Limina bootstrap/setup skill: this project is already managed by the runtime.
 Never ask the user to operate internal commands. Persist decisive knowledge before ending the turn.

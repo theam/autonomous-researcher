@@ -12,46 +12,41 @@
 
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![GitHub stars](https://img.shields.io/github/stars/theam/limina)](https://github.com/theam/limina/stargazers)
-[![GitHub forks](https://img.shields.io/github/forks/theam/limina)](https://github.com/theam/limina/network/members)
 
-Limina is a collaborative runtime for long-running, evidence-driven work with Codex.
+Limina is a collaborative CLI runtime for long-running, evidence-driven work. Each project runs
+on a Limina-managed **Codex** or **Claude Code** engine.
 
-Give a Limina project a mission, success criteria, context, variables, and secrets. Limina owns
-the Codex runtime, keeps the work running across interruptions, persists the knowledge it produces,
-and gives your team one CLI for reviewing and steering it together.
-
-You operate projects. Limina operates sessions, threads, subagents, leases, retries, workspaces,
-and recovery.
+Your team operates projects: provide missions and resources, review accepted knowledge, and steer
+strategy. Limina operates everything below that boundary: model sessions, turns, subagents,
+workspaces, retries, leases, checkpoints, and restart recovery.
 
 ## Quick start
 
-You need Docker, an OpenAI API key, and [`uv`](https://docs.astral.sh/uv/) for the host CLI.
-
-Clone the repository and install the CLI:
+You need Docker and [`uv`](https://docs.astral.sh/uv/) for the host CLI. Add the credential for
+each engine you intend to use:
 
 ```bash
 git clone https://github.com/theam/limina.git
 cd limina
 uv tool install .
-```
 
-Create `.env` with the credentials for your Limina instance:
-
-```dotenv
-OPENAI_API_KEY=...
+cat > .env <<'ENV'
 LIMINA_API_TOKEN=replace-with-a-long-random-value
-```
+OPENAI_API_KEY=...       # Codex projects
+ANTHROPIC_API_KEY=...    # Claude Code projects
+ENV
 
-Start the complete server with one Docker command:
-
-```bash
 docker compose up --build
 ```
 
-The container applies its database migrations and starts the managed runtime. Its named
-`limina-data` volume preserves the database, project workspaces, and local secret-encryption key.
+Only `LIMINA_API_TOKEN` is required to start the server. A project needs working credentials for
+its selected engine when execution starts. You may configure either provider or both.
 
-Open another terminal and configure the CLI:
+The one container applies migrations and starts the API and supervisor. The `limina-data` Docker
+volume preserves the database, project workspaces, private engine continuation data, and the local
+secret-encryption key.
+
+In another terminal:
 
 ```bash
 export LIMINA_API_TOKEN=replace-with-the-same-value
@@ -60,60 +55,78 @@ export LIMINA_ACTOR=adrian
 limina doctor
 ```
 
-`LIMINA_URL` defaults to `http://127.0.0.1:7433`.
+`LIMINA_URL` defaults to `http://127.0.0.1:7433`. `doctor` confirms connectivity and reports the
+available engines.
 
-## Create your first project
+## Create a project
+
+Choose the engine once, when the project is created:
 
 ```bash
-limina project create retrieval \
-  --name "Multilingual retrieval" \
+# Codex is the default
+limina project create retrieval-codex \
+  --runtime codex \
+  --name "Multilingual retrieval — Codex" \
+  --mission "Improve multilingual product retrieval" \
+  --success "Increase held-out NDCG by 10% without a P95 latency regression" \
+  --context "The current baseline combines BM25 with embeddings"
+
+# Or run the same kind of mission with Claude Code
+limina project create retrieval-claude \
+  --runtime claude-code \
+  --name "Multilingual retrieval — Claude" \
   --mission "Improve multilingual product retrieval" \
   --success "Increase held-out NDCG by 10% without a P95 latency regression" \
   --context "The current baseline combines BM25 with embeddings"
 ```
 
-A project is a durable instance of a mission. Creating it records the brief; execution begins only
-when you start it.
+The runtime is immutable for a project. This keeps its workspace, continuation history, audit
+trail, and behavior coherent. Create another project when you want an independent run or an
+engine comparison. Creating records the brief; execution starts only when you say so.
 
-### Provide variables and secrets
+## Provide resources
 
-Variables are visible configuration and resource references:
+Resources belong to a project, not to a provider. The selected runtime receives them only during
+that project's managed turns.
+
+Variables are visible configuration and references:
 
 ```bash
-limina resource variable retrieval SOURCE_REPO_URL https://github.com/acme/search
-limina resource variable retrieval EVAL_SET_URI s3://research/eval-v3.parquet
+limina resource variable retrieval-claude SOURCE_REPO_URL https://github.com/acme/search
+limina resource variable retrieval-claude EVAL_SET_URI s3://research/eval-v3.parquet
 ```
 
-Secrets are write-only. Read them from your environment, standard input, or a hidden interactive
-prompt—never place a secret value in the command itself:
+Secrets are encrypted and write-only. Read them from an environment variable, standard input, or
+a hidden prompt—never put the value directly in shell history:
 
 ```bash
-limina resource secret retrieval GITHUB_TOKEN --from-env GITHUB_TOKEN
+limina resource secret retrieval-claude GITHUB_TOKEN --from-env GITHUB_TOKEN
 printf '%s' "$AWS_SESSION_TOKEN" | \
-  limina resource secret retrieval AWS_SESSION_TOKEN --from-stdin
-limina resource secret retrieval SERVICE_API_KEY
+  limina resource secret retrieval-claude AWS_SESSION_TOKEN --from-stdin
+limina resource secret retrieval-claude SERVICE_API_KEY
+
+limina resource list retrieval-claude
 ```
+
+Secret values are not returned by the public API. Limina redacts exact values from runtime events,
+decisions, and adapter failures, and prevents project resources from overriding control-plane or
+provider credential names. Setting, rotating, or revoking a resource during active work causes a
+controlled turn restart, so the child process receives a fresh environment and revoked values do
+not linger in the old process.
+
+## Start it and leave
 
 ```bash
-limina resource list retrieval
+limina start retrieval-claude
+limina status retrieval-claude
 ```
 
-Secret resource values are encrypted before persistence, never returned by the public API,
-exact-value redacted from managed runtime events and decisions, and injected only into that
-project's Codex environment. The runtime also instructs Codex never to print or persist them.
+Limina now owns the execution loop. Closing the terminal does not stop the project. A server
+restart reconstructs active project loops and resumes each provider's private continuation.
 
-### Start the mission
+## Collaborate
 
-```bash
-limina start retrieval
-limina status retrieval
-```
-
-Limina now owns the execution loop. You can close the terminal without stopping the project.
-
-## Collaborate with your team
-
-Every teammate connects to the same Limina instance and sets an identity for attribution:
+Every teammate connects to the same instance and supplies an identity for attribution:
 
 ```bash
 export LIMINA_URL=https://limina.example.com
@@ -121,36 +134,35 @@ export LIMINA_API_TOKEN=...
 export LIMINA_ACTOR=maya
 ```
 
-### Watch durable activity
+Follow durable activity:
 
 ```bash
-limina watch retrieval
+limina watch retrieval-claude
 ```
 
-`Ctrl-C` stops watching. It does not stop the project. Activity is persisted and can be replayed
-from an event cursor.
+`Ctrl-C` stops watching, not the project. Events can be replayed after a disconnect.
 
-### Steer asynchronously
+Steer asynchronously:
 
 ```bash
-limina steer retrieval \
+limina steer retrieval-claude \
   "Compare against the strongest cross-encoder baseline before drawing a conclusion."
 
-limina steer retrieval \
+limina steer retrieval-claude \
   'Approved to spend up to $100 on the larger evaluation.' \
   --kind APPROVAL
 ```
 
-Guidance is committed before delivery. It reaches the active Codex turn immediately when possible
-and remains queued durably otherwise.
+Guidance is committed before delivery. With Codex, Limina steers the active turn directly. With
+Claude Code, Limina interrupts the active response and immediately continues the same managed
+session with the new direction. If no turn is active, either engine receives the queued guidance
+on its next turn.
 
-### Enter the live project
+Enter the live project when synchronous steering matters:
 
 ```bash
-limina attach retrieval
+limina attach retrieval-claude
 ```
-
-`attach` shows the current state, follows live activity, and accepts direct feedback:
 
 ```text
 limina> Prioritize generalization over a benchmark-specific improvement.
@@ -160,174 +172,161 @@ limina> /interrupt
 limina> /detach
 ```
 
-Plain text steers the active turn. `/detach` only leaves the live view; Limina keeps working.
-Multiple teammates can attach simultaneously and see the same attributed event history.
+Plain text steers the managed runtime. `/detach` only leaves the live view. Multiple teammates may
+attach at once; everyone sees the same attributed, durable event sequence.
 
-## Review the work and knowledge
+## Review knowledge
 
 ```bash
-limina review retrieval
-limina review retrieval --artifact H001
-limina review retrieval --artifact E003
-limina review retrieval --artifact F002
+limina review retrieval-claude
+limina review retrieval-claude --artifact H001
+limina review retrieval-claude --artifact E003
+limina review retrieval-claude --artifact F002
 ```
 
-Limina maintains an evidence chain:
+Limina enforces the evidence chain:
 
 ```text
 Hypothesis → Experiment → Finding
 ```
 
-An experiment cannot exist without a hypothesis, and a finding cannot exist without a completed
-experiment. Observations are append-only; IDs are allocated atomically; experiment writes are
-scoped; and stale decisions are rejected instead of overwriting newer knowledge.
+Experiments require hypotheses, and findings require completed experiments. Observations are
+append-only; IDs are allocated atomically; independent experiments can write concurrently; and
+stale decisions are rejected instead of overwriting newer knowledge.
 
-Export a deterministic Markdown projection whenever you want an offline review or archive:
+Export a deterministic Markdown projection for offline review, Obsidian, archival, or Git:
 
 ```bash
-limina export retrieval ./retrieval-kb
+limina export retrieval-claude ./retrieval-kb
 ```
 
-The database remains canonical while the project is running. Markdown and Git are review and
-portability surfaces, not the live coordination mechanism.
+The database is canonical while a project runs. Markdown and Git are review and portability
+surfaces, not the live coordination mechanism.
 
-## Project lifecycle
+## Lifecycle and commands
 
 ```bash
 limina project list
-limina project show retrieval
+limina project show retrieval-claude
 
-limina pause retrieval
-limina resume retrieval
-limina stop retrieval
-limina project archive retrieval
+limina pause retrieval-claude
+limina resume retrieval-claude
+limina stop retrieval-claude
+limina project archive retrieval-claude
 ```
 
-- `pause` interrupts active work safely and keeps the project resumable.
+- `pause` interrupts active work and preserves resumability.
 - `resume` continues a paused, waiting, stopped, or failed project.
 - `stop` ends execution without deleting history or knowledge.
-- `archive` removes an inactive project from the default project list without deleting it.
-
-## Command overview
+- `archive` hides an inactive project from the default list without deleting it.
 
 | Command | Purpose |
 |---|---|
-| `limina project create/list/show/archive` | Manage durable project instances |
+| `limina project create/list/show/archive` | Manage durable projects and select their runtime |
 | `limina start/pause/resume/stop` | Control project lifecycle |
-| `limina status` | See the current objective, next step, blocker, and progress |
+| `limina status` | See objective, next step, blocker, and progress |
 | `limina resource variable/secret/list/remove` | Manage project-scoped access |
-| `limina watch` | Follow the durable activity stream |
+| `limina watch` | Follow durable activity |
 | `limina steer` | Send durable feedback, answers, approvals, or blockers |
-| `limina attach` | Watch and steer the active project interactively |
+| `limina attach` | Watch and steer an active project interactively |
 | `limina review` | Review hypotheses, experiments, findings, and evidence |
 | `limina export` | Produce a portable Markdown knowledge base |
-| `limina doctor` | Verify connectivity and authentication |
+| `limina doctor` | Verify the instance and available runtime engines |
 
-Run `limina --help` or `limina <command> --help` for the complete interface.
-
-All non-interactive commands support global JSON output:
+Run `limina --help` or `limina <command> --help` for the full interface. Non-interactive commands
+support global JSON output:
 
 ```bash
-limina --json status retrieval | jq '.project.status'
-limina --json review retrieval | jq '.findings[] | {id, title}'
+limina --json project show retrieval-claude | jq '.runtime'
+limina --json review retrieval-claude | jq '.findings[] | {id, title}'
 ```
 
-## How Limina owns the runtime
+## Runtime ownership
 
 ```mermaid
 flowchart LR
     Team["Team"] --> CLI["Limina CLI"]
     CLI --> API["Project API + live WebSocket"]
-    API --> Supervisor["Project supervisor"]
-    Supervisor --> Codex["Managed Codex runtime"]
-    Supervisor --> Workspace["Durable workspace"]
+    API --> Supervisor["Limina project supervisor"]
+    Supervisor --> Adapter{"Project runtime"}
+    Adapter --> Codex["Codex SDK"]
+    Adapter --> Claude["Claude Agent SDK"]
+    Supervisor --> Workspace["Durable project workspace"]
     Supervisor --> DB[("Canonical project state")]
-    Codex --> Knowledge["Private H → E → F commands"]
+    Codex --> Knowledge["Private H → E → F protocol"]
+    Claude --> Knowledge
     Knowledge --> DB
     DB --> CLI
 ```
 
-Each active project has one Limina-owned supervisory loop. The loop creates or resumes the private
-Codex thread, injects only that project's resources, streams selected activity, checkpoints
-progress, and recovers automatically after process restarts.
+Each active project has one Limina-owned supervisory loop and exactly one engine. The loop creates
+or resumes the private continuation, injects project resources, streams selected activity,
+checkpoints progress, and recovers after process restarts. Users never operate workers, sessions,
+threads, subagents, leases, versions, or checkpoints.
 
-The public CLI and OpenAPI deliberately expose no worker, session, thread, subagent, lease, version,
-or checkpoint controls.
+## Deployment
 
-## Deployment modes
-
-### Single instance
-
-The default `compose.yaml` runs one Limina container with SQLite and a persistent Docker volume:
+The default single-instance topology uses SQLite and one persistent volume:
 
 ```bash
 docker compose up --build
 ```
 
-This is the simplest deployment for a team sharing one server.
-
-### PostgreSQL
-
-Use the PostgreSQL topology when you need managed database operations or plan to run multiple
-runtime replicas:
+Use PostgreSQL when you need managed database operations or plan for multiple runtime replicas:
 
 ```bash
 docker compose -f compose.cloud.yaml up --build
 ```
 
-PostgreSQL coordinates atomic artifact IDs, project ownership, scoped experiment writes,
-compare-and-swap decisions, idempotent mutations, and ordered human guidance.
+The same runtime image contains both engine adapters. PostgreSQL coordinates project ownership,
+atomic artifact IDs, scoped experiment writes, compare-and-swap decisions, idempotent mutations,
+and ordered human guidance.
 
-## Security and production boundary
+## Security boundary
 
-The default instance uses bearer-token authentication and a locally generated Fernet key. The key
-is stored with restrictive permissions in the persistent volume. Resource records, command
-receipts, API responses, and runtime events never intentionally contain the plaintext value. This
-does not protect against an attacker who obtains the entire volume together with its key.
-
-Before exposing Limina to an untrusted network:
+The default instance uses one bearer token and a generated Fernet key stored in the persistent
+volume with restrictive permissions. This is suitable for a trusted team deployment, not an
+untrusted multi-tenant service. Before internet exposure:
 
 - terminate the API behind TLS;
-- replace the shared bearer token with OIDC and project-level RBAC;
-- provide `LIMINA_SECRET_KEY` from a secrets manager;
+- replace the shared token with OIDC and project-level RBAC;
+- load `LIMINA_SECRET_KEY` from a secrets manager;
 - isolate project workspaces with containers or microVMs;
 - add quotas, audit export, object storage, and operational telemetry.
 
-For the implemented threat model and recovery behavior, read the
-[architecture decision](docs/cloud-runtime-architecture.md).
+The managed model process does not receive the database URL or Limina administrative token. It
+gets a short-lived capability scoped to the active project. See the
+[architecture decision](docs/cloud-runtime-architecture.md) for the full trust and concurrency
+model.
 
 ## Development
 
-Install the application and Codex runtime dependencies:
+Install both managed runtimes and run the acceptance suite:
 
 ```bash
-uv sync --extra codex
-```
-
-Run the complete acceptance suite:
-
-```bash
+uv sync --extra runtimes
 make runtime-check
 ```
 
-Run a local development server without Docker:
+Run locally with either or both provider credentials:
 
 ```bash
-export OPENAI_API_KEY=...
 export LIMINA_API_TOKEN=local-secret
+export OPENAI_API_KEY=...       # optional: Codex projects
+export ANTHROPIC_API_KEY=...    # optional: Claude Code projects
 uv run limina serve
 ```
 
-Additional documentation:
+Further reading:
 
-- [CLI workflow](docs/cloud-runtime-cli.md)
+- [CLI user story](docs/cloud-runtime-cli.md)
 - [Architecture and concurrency model](docs/cloud-runtime-architecture.md)
 - [Verification evidence](docs/cloud-runtime-evidence.md)
 
 ## Contributing
 
 - [Open an issue](https://github.com/theam/limina/issues) for bugs and feature requests.
-- [Start a discussion](https://github.com/theam/limina/discussions) for questions and design ideas.
+- [Start a discussion](https://github.com/theam/limina/discussions) for design questions.
 
 Built by [The Agile Monkeys](https://theagilemonkeys.com).
 

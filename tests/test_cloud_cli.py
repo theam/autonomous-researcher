@@ -27,6 +27,7 @@ class FakePublicClient:
             "mission": payload["objective"],
             "success_criteria": payload["success_criteria"],
             "context": payload["context"],
+            "runtime": payload["runtime"],
             "status": "CREATED",
             "current_objective": payload["objective"],
             "next_step": "Frame the first falsifiable hypothesis.",
@@ -93,7 +94,48 @@ class CloudCliTests(unittest.TestCase):
         value = json.loads(result.output)
         self.assertEqual(value["slug"], "cli-test")
         self.assertEqual(value["status"], "CREATED")
+        self.assertEqual(value["runtime"], "codex")
         self.assertNotIn("thread_id", value)
+
+    def test_project_create_accepts_the_claude_code_runtime(self) -> None:
+        with mock.patch("limina_cloud.cli.HttpRuntimeClient", FakePublicClient):
+            result = self.runner.invoke(
+                app,
+                [
+                    "--json",
+                    "project",
+                    "create",
+                    "claude-test",
+                    "--runtime",
+                    "claude-code",
+                    "--mission",
+                    "Prove engine selection.",
+                    "--success",
+                    "Claude Code is selected.",
+                ],
+            )
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertEqual(json.loads(result.output)["runtime"], "claude-code")
+
+    def test_project_create_rejects_an_unknown_runtime_before_transport(self) -> None:
+        with mock.patch("limina_cloud.cli.HttpRuntimeClient", FakePublicClient):
+            result = self.runner.invoke(
+                app,
+                [
+                    "project",
+                    "create",
+                    "invalid-runtime",
+                    "--runtime",
+                    "other",
+                    "--mission",
+                    "Reject invalid selection.",
+                    "--success",
+                    "No request is sent.",
+                ],
+            )
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn("Invalid value", result.output)
+        self.assertIn("claude-code", result.output)
 
     def test_resource_commands_make_secrets_write_only(self) -> None:
         secret_value = "cli-super-secret"

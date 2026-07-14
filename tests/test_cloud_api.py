@@ -67,7 +67,7 @@ class CloudApiTests(unittest.TestCase):
             database_url=database_url,
             token="secret",
             workspace_root=Path(self.temp_dir.name) / "workspaces",
-            agent_factory=lambda _slug: self.session,
+            agent_factory=lambda _slug, _engine: self.session,
             poll_interval=0.01,
         )
         self.client_context = TestClient(self.app)
@@ -95,6 +95,7 @@ class CloudApiTests(unittest.TestCase):
                 "objective": "Prove that Limina owns execution.",
                 "context": "API integration test.",
                 "success_criteria": "A teammate can steer the managed live turn.",
+                "runtime": "codex",
             },
             headers=self.command_headers(),
         )
@@ -104,6 +105,7 @@ class CloudApiTests(unittest.TestCase):
         response = self.client.get("/healthz", headers=self.auth)
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["runtime_owner"], "limina")
+        self.assertEqual(response.json()["runtimes"], ["codex", "claude-code"])
 
         schema = self.client.get("/openapi.json", headers=self.auth).json()
         paths = " ".join(schema["paths"])
@@ -128,6 +130,12 @@ class CloudApiTests(unittest.TestCase):
         self.assertEqual(first.status_code, 201, first.text)
         self.assertEqual(first.json(), second.json())
         self.assertEqual(first.json()["status"], "CREATED")
+        self.assertEqual(first.json()["runtime"], "codex")
+        created_events = self.client.get(
+            "/v1/projects/cloud-test/events", headers=self.auth
+        ).json()["events"]
+        self.assertEqual(created_events[0]["detail"]["runtime"], "codex")
+        self.assertNotIn("runtime_engine", created_events[0]["detail"])
 
         variable = self.client.put(
             "/v1/projects/cloud-test/resources/variables/SOURCE_URL",
@@ -167,8 +175,32 @@ class CloudApiTests(unittest.TestCase):
         status = self.client.get("/v1/projects/cloud-test/status", headers=self.auth)
         self.assertEqual(status.status_code, 200, status.text)
         serialized = status.text.lower()
-        for forbidden in ("thread_id", "worker_id", "inbox_cursor", "version"):
+        for forbidden in (
+            "thread_id",
+            "continuation_id",
+            "worker_id",
+            "inbox_cursor",
+            "version",
+        ):
             self.assertNotIn(forbidden, serialized)
+
+    def test_project_creation_selects_a_supported_runtime_engine(self) -> None:
+        payload = {
+            "slug": "claude-project",
+            "name": "Claude project",
+            "objective": "Use the Claude Code engine.",
+            "context": "API selection test.",
+            "success_criteria": "The engine is persisted.",
+            "runtime": "claude-code",
+        }
+        created = self.client.post("/v1/projects", json=payload, headers=self.command_headers())
+        self.assertEqual(created.status_code, 201, created.text)
+        self.assertEqual(created.json()["runtime"], "claude-code")
+
+        payload["slug"] = "invalid-project"
+        payload["runtime"] = "other"
+        rejected = self.client.post("/v1/projects", json=payload, headers=self.command_headers())
+        self.assertEqual(rejected.status_code, 422, rejected.text)
 
     def test_live_attach_can_steer_the_active_managed_turn(self) -> None:
         self.assertEqual(self.create_project().status_code, 201)

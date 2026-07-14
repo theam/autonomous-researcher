@@ -25,6 +25,7 @@ from websockets.sync.client import connect as websocket_connect
 from .api import create_app
 from .client import HttpRuntimeClient, LocalRuntimeClient, write_snapshot
 from .database import DEFAULT_DATABASE_PATH
+from .engines import RuntimeEngine, runtime_engine_label
 from .errors import InvariantError, LiminaError
 
 app = typer.Typer(
@@ -172,6 +173,7 @@ def _render_project(console: Console, project: dict[str, Any]) -> None:
     console.print(
         Panel(
             f"[bold]{project['name']}[/bold]\n{project['mission']}\n\n"
+            f"Engine     {runtime_engine_label(project['runtime'])}\n"
             f"Status     [cyan]{project['status']}[/cyan]\n"
             f"Objective  {project['current_objective']}\n"
             f"Next       {project['next_step']}\n"
@@ -225,6 +227,13 @@ def create_project(
     context: Annotated[
         str, typer.Option("--context", help="Known context, constraints, and prior work.")
     ] = "",
+    runtime: Annotated[
+        RuntimeEngine,
+        typer.Option(
+            "--runtime",
+            help="Managed execution engine: codex or claude-code.",
+        ),
+    ] = "codex",
 ) -> None:
     """Create a project from a mission; execution begins only when you start it."""
     mission = mission or typer.prompt("Mission")
@@ -239,6 +248,7 @@ def create_project(
                 "objective": mission,
                 "success_criteria": success,
                 "context": context,
+                "runtime": runtime,
             },
             actor=state.actor,
             command_id=_command_id(),
@@ -261,8 +271,17 @@ def list_projects(
         lambda console, values: _table(
             console,
             "Limina projects",
-            ["Project", "Status", "Mission", "Next"],
-            [[item["slug"], item["status"], item["mission"], item["next_step"]] for item in values],
+            ["Project", "Engine", "Status", "Mission", "Next"],
+            [
+                [
+                    item["slug"],
+                    runtime_engine_label(item["runtime"]),
+                    item["status"],
+                    item["mission"],
+                    item["next_step"],
+                ]
+                for item in values
+            ],
         ),
     )
 
@@ -691,7 +710,8 @@ def doctor(ctx: typer.Context) -> None:
         ctx,
         result,
         lambda console, value: console.print(
-            f"[green]ok[/green] {state.url} · runtime owned by {value['runtime_owner']}"
+            f"[green]ok[/green] {state.url} · runtime owned by {value['runtime_owner']} · "
+            f"engines {', '.join(runtime_engine_label(item) for item in value['runtimes'])}"
         ),
     )
 
