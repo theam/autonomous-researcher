@@ -16,6 +16,7 @@ warnings.filterwarnings(
 from starlette.testclient import TestClient  # noqa: E402
 
 from limina_cloud.api import create_app  # noqa: E402
+from limina_cloud.models import Event  # noqa: E402
 from limina_cloud.runtime import RuntimeDecision, RuntimeTurn  # noqa: E402
 
 
@@ -232,7 +233,7 @@ class CloudApiTests(unittest.TestCase):
             headers=self.command_headers(),
         )
         self.assertEqual(response.status_code, 202, response.text)
-        self.assertEqual(set(response.json()), {"delivery", "kind", "accepted_at"})
+        self.assertEqual(set(response.json()), {"id", "delivery", "kind", "accepted_at", "status"})
         self.assertNotIn("message", response.json())
 
     def test_private_agent_commands_require_a_project_scoped_capability(self) -> None:
@@ -284,6 +285,26 @@ class CloudApiTests(unittest.TestCase):
         error = response.json()["error"]
         self.assertEqual(error["code"], "not_found")
         self.assertIn("does not exist", error["message"])
+
+    def test_review_recent_activity_uses_the_newest_events_after_large_histories(self) -> None:
+        self.assertEqual(self.create_project().status_code, 201)
+        challenge_id = self.app.state.runtime.service.get_challenge("cloud-test")["id"]
+        with self.app.state.runtime.database.session() as session, session.begin():
+            session.add_all(
+                Event(
+                    challenge_id=challenge_id,
+                    event_type="test.marker",
+                    actor="tester",
+                    payload={"marker": marker},
+                    command_id=f"marker-{marker}",
+                )
+                for marker in range(1005)
+            )
+        review = self.client.get("/v1/projects/cloud-test/review", headers=self.auth)
+        self.assertEqual(review.status_code, 200, review.text)
+        recent = review.json()["recent_activity"]
+        self.assertEqual(len(recent), 50)
+        self.assertEqual(recent[-1]["detail"]["marker"], 1004)
 
 
 if __name__ == "__main__":

@@ -157,11 +157,20 @@ class HttpRuntimeClient:
         return self._request("POST", "/v1/projects", payload, actor, command_id)
 
     def projects(self, *, include_archived: bool = False) -> list[dict[str, Any]]:
-        return self._request(
-            "GET",
-            "/v1/projects",
-            params={"include_archived": str(include_archived).lower()},
-        )
+        items: list[dict[str, Any]] = []
+        cursor: str | None = None
+        while True:
+            params: dict[str, Any] = {
+                "include_archived": str(include_archived).lower(),
+                "limit": 200,
+            }
+            if cursor:
+                params["cursor"] = cursor
+            page = self._request("GET", "/v1/projects", params=params)
+            items.extend(page["items"])
+            cursor = page.get("next_cursor")
+            if not cursor:
+                return items
 
     def project(self, slug: str) -> dict[str, Any]:
         return self._request("GET", f"/v1/projects/{slug}")

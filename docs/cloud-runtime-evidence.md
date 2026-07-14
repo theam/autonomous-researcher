@@ -8,6 +8,8 @@
 | Codex and Claude Code are selectable | immutable runtime column plus validated public `runtime` field | service, API, CLI, migration tests |
 | Users do not manage provider machinery | public CLI/OpenAPI expose project concepts; serializers remove private state | public-surface and sanitized-status tests |
 | Agents use the same public boundary | authenticated MCP tools/resources call the shared project operation layer | MCP discovery, cross-transport, attribution, and resource tests |
+| Team identity and roles are enforced | OIDC/JWT claims create principals; project membership gates every shared operation | signed-token, anti-spoofing, membership, and role tests |
+| Browsers can attach safely | short-lived one-time live tickets carry project identity and role | ticket consumption, replay rejection, and read-only viewer tests |
 | Synchronous steering works | Codex steers in-turn; Claude interrupts then redirects the same session | adapter, supervisor, and WebSocket tests |
 | Asynchronous steering survives disconnects | inbox write precedes live delivery and remains pending until checkpoint | durable inbox/checkpoint tests |
 | A new process can resume | provider continuation is persisted before/while managed work starts | supervisor and both adapter tests |
@@ -18,6 +20,9 @@
 | Resource changes reach active work safely | controlled restart discards the stale turn and rematerializes its environment | resource-refresh supervisor test |
 | H → E → F is enforced | experiment requires H; finding requires completed E | invariant tests |
 | Parallel KB writes are safe | atomic IDs, per-experiment leases, append-only observations, CAS transitions | concurrency and stale-write tests |
+| Knowledge is queryable and visualizable | PostgreSQL FTS, paginated filters, graph relations, tags, comments, revisions, and saved views | UI-readiness API and migration tests |
+| Runtime work is observable | every managed turn has a correlated run record with timing, events, errors, tools, and available usage | supervisor run, run detail, and analytics tests |
+| Public diagnostics stay product-level | run events use the same sanitizer as activity/live views; receipts are scoped to signed subjects | internal-field redaction, duplicate-display-name, and cross-project replay tests |
 | Export remains portable | deterministic snapshot passes the existing KB validator | export validation test |
 | Schema upgrades preserve Codex projects | migration defaults old projects to Codex and renames private continuity state | upgrade/downgrade and preservation tests |
 
@@ -39,6 +44,18 @@ OPENAI_API_KEY=test ANTHROPIC_API_KEY=test LIMINA_API_TOKEN=acceptance-test-toke
 
 `make runtime-check` runs those mechanical checks. Building `Dockerfile.cloud` is a separate
 acceptance step when a Docker daemon is available.
+
+### UI control-plane shipping review — 2026-07-14
+
+An independent API/security review initially found three defects: a cross-project comment replay,
+raw internal fields in run-detail events, and possible last-owner demotion. The fixes now have
+regression tests. A second independent pass verified those fixes, signed-subject receipt scoping,
+secret-redacted failure storage, source-credential rejection, and concurrent owner locking, and
+reported no remaining P0/P1 issue.
+
+The current production image was rebuilt in an isolated Compose project and returned an
+authenticated health response advertising Limina runtime ownership, both engine adapters, REST,
+and MCP. The smoke volume and network were removed after the check.
 
 ### API and MCP packaged smoke — 2026-07-14
 
@@ -163,7 +180,7 @@ current two-runtime result is recorded separately below.
 check loaded both SDKs, executed a basic unprivileged `bubblewrap` boundary, and rendered packaged
 `limina` project help. A fresh one-command Compose instance then:
 
-1. applied the three migrations and became healthy;
+1. applied the runtime migrations and became healthy;
 2. advertised `runtimes=["codex", "claude-code"]`;
 3. accepted one `runtime=codex` project and one `runtime=claude-code` project;
 4. returned each immutable runtime through the public project projection;
@@ -194,20 +211,20 @@ does not replace the live Anthropic execution smoke described above.
 
 ## Known limits before production
 
-1. Public auth is one bearer token and caller-supplied actor identity; add OIDC and project RBAC.
-2. Workspaces are durable directories, not isolated project containers or microVMs.
-3. Large evidence has external URIs but no object-store lifecycle manager.
-4. Live guidance is durable-at-least-once; exact boundary failures may replay a message.
-5. The Codex Python SDK is beta and one private result collector remains a compatibility risk.
-6. Claude Code continuity includes provider-managed local transcript files; backup and restore of
+1. Workspaces are durable directories, not isolated project containers or microVMs.
+2. Bounded uploads live in the project workspace; large evidence has external URIs but no
+   object-store lifecycle manager or malware-scanning pipeline.
+3. Live guidance is durable-at-least-once; exact boundary failures may replay a message.
+4. The Codex Python SDK is beta and one private result collector remains a compatibility risk.
+5. Claude Code continuity includes provider-managed local transcript files; backup and restore of
    the Limina volume must preserve those files with the database.
-7. A live Claude Code provider smoke and restart-resume proof are still required.
-8. There is no transactional notification outbox, quota system, billing, or admin audit export.
-9. Compose demonstrates one runtime replica; multi-replica failover still needs a target-platform
+6. A live Claude Code provider smoke and restart-resume proof are still required.
+7. There is no transactional notification outbox, quota system, billing, or admin audit export.
+8. Compose demonstrates one runtime replica; multi-replica failover still needs a target-platform
    test against managed PostgreSQL.
-10. The generated local encryption key favors one-command operation. Replicas need a shared key
+9. The generated local encryption key favors one-command operation. Replicas need a shared key
     from a secrets manager, and backups need separate key escrow.
-11. MCP intentionally omits secret-value writes; automation that provisions secrets must use the
+10. MCP intentionally omits secret-value writes; automation that provisions secrets must use the
     trusted CLI or REST API. Remote hostnames must be added to the MCP DNS-rebinding allowlist.
 
 These limits do not change runtime ownership. A scheduler, sandbox manager, or notification service

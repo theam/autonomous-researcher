@@ -7,6 +7,7 @@ workspace, and checkpoint needed to keep those projects running.
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import json
 import os
 import secrets
@@ -18,6 +19,7 @@ from pathlib import Path
 from typing import Any, Protocol
 from uuid import uuid4
 
+from .collaboration import CollaborationService
 from .engines import RuntimeEngine
 from .errors import AuthenticationError, LeaseConflictError, LiminaError, TransportError
 from .exporter import MarkdownExporter
@@ -119,6 +121,15 @@ class RuntimeTurn:
     continuation_id: str
     turn_id: str
     decision: RuntimeDecision
+    usage: RuntimeUsage | None = None
+
+
+@dataclass(frozen=True)
+class RuntimeUsage:
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    cached_input_tokens: int | None = None
+    cost_microusd: int | None = None
 
 
 @dataclass(frozen=True)
@@ -184,7 +195,43 @@ def _redact_turn(turn: RuntimeTurn, secret_values: tuple[str, ...]) -> RuntimeTu
             next_step=_redact_text(decision.next_step, secret_values),
             blocker=_redact_text(decision.blocker, secret_values),
         ),
+        usage=turn.usage,
     )
+
+
+def _usage_from_result(result: Any) -> RuntimeUsage | None:
+    raw_usage = getattr(result, "usage", None)
+    if raw_usage is None:
+        raw_usage = {}
+    if not isinstance(raw_usage, dict):
+        raw_usage = {
+            key: getattr(raw_usage, key, None)
+            for key in (
+                "input_tokens",
+                "output_tokens",
+                "cache_read_input_tokens",
+                "cached_input_tokens",
+            )
+        }
+    cost = getattr(result, "total_cost_usd", None)
+    values = RuntimeUsage(
+        input_tokens=_optional_int(raw_usage.get("input_tokens")),
+        output_tokens=_optional_int(raw_usage.get("output_tokens")),
+        cached_input_tokens=_optional_int(
+            raw_usage.get("cache_read_input_tokens") or raw_usage.get("cached_input_tokens")
+        ),
+        cost_microusd=round(float(cost) * 1_000_000) if cost is not None else None,
+    )
+    if all(value is None for value in values.__dict__.values()):
+        return None
+    return values
+
+
+def _optional_int(value: Any) -> int | None:
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
 
 
 EventSink = Callable[[RuntimeEvent], None]
@@ -328,7 +375,7 @@ class CodexAgentSession:
                 turn_id=result.id,
             )
         decision = _parse_runtime_decision(result.final_response, provider="Codex")
-        return RuntimeTurn(thread.id, result.id, decision)
+        return RuntimeTurn(thread.id, result.id, decision, _usage_from_result(result))
 
     @staticmethod
     def _tap_stream(events: Iterator[Any], on_event: EventSink) -> Iterator[Any]:
@@ -528,6 +575,7 @@ class ClaudeCodeAgentSession:
                     continuation_id=result.session_id,
                     turn_id=turn_id or str(uuid4()),
                     decision=decision,
+                    usage=_usage_from_result(result),
                 )
         except LiminaError:
             raise
@@ -662,9 +710,11 @@ class ProjectSupervisor:
         lease_ttl_seconds: int = 3600,
     ) -> None:
         self.service = service
+        self.collaboration = CollaborationService(service.database)
         self.exporter = exporter
         self.workspace_root = workspace_root
         self.internal_url = internal_url.rstrip("/")
+        self._custom_agent_factory = agent_factory is not None
         self.agent_factory = agent_factory or self._default_agent_factory
         self.poll_interval = poll_interval
         self.lease_ttl_seconds = lease_ttl_seconds
@@ -676,7 +726,18 @@ class ProjectSupervisor:
         self._lease_lost: dict[str, asyncio.Event] = {}
         self._resource_refresh: dict[str, asyncio.Event] = {}
         self._capabilities: dict[str, tuple[str, str]] = {}
+        self._active_run_ids: dict[str, str] = {}
         self._closed = False
+
+    def configured_engines(self) -> set[str]:
+        if self._custom_agent_factory:
+            return {"codex", "claude-code"}
+        available: set[str] = set()
+        if importlib.util.find_spec("openai_codex") is not None:
+            available.add("codex")
+        if importlib.util.find_spec("claude_agent_sdk") is not None:
+            available.add("claude-code")
+        return available
 
     def _default_agent_factory(self, slug: str, engine: RuntimeEngine) -> AgentSession:
         if engine == "codex":
@@ -847,7 +908,11 @@ class ProjectSupervisor:
                     self._complete_resource_refresh(slug)
                     continue
                 error_detail = dict(exc.details) if isinstance(exc, LiminaError) else {}
-                error_detail["error"] = exc.message if isinstance(exc, LiminaError) else str(exc)
+                error_detail["error"] = (
+                    exc.message
+                    if isinstance(exc, LiminaError)
+                    else "The managed runtime raised an unexpected internal error."
+                )
                 self._runtime_event(
                     slug,
                     RuntimeEvent(
@@ -886,6 +951,14 @@ class ProjectSupervisor:
             self._renew_coordinator_lease(slug, session),
             name=f"limina:{slug}:lease",
         )
+        project = self.service.get_challenge(slug)
+        run_id = self.collaboration.start_run(
+            slug,
+            runtime_engine=project["runtime_engine"],
+            model=str(getattr(session, "model", "")) or None,
+        )
+        self._active_run_ids[slug] = run_id
+        secret_values: tuple[str, ...] = ()
         try:
             status = self.service.status(slug)
             coordinator = status["challenge"]["coordinator"]
@@ -896,6 +969,7 @@ class ProjectSupervisor:
             )
             files = self.exporter.snapshot(slug)
             resources = self.service.list_resources(slug)
+            sources = self.collaboration.sources(slug)
             resource_environment = self.service.resource_environment(slug)
             secret_values = tuple(
                 resource_environment[item["name"]] for item in resources if item["type"] == "SECRET"
@@ -911,7 +985,7 @@ class ProjectSupervisor:
                 ),
             )
             turn = await session.run_turn(
-                prompt=self._prompt(slug, files, resources, messages),
+                prompt=self._prompt(slug, files, resources, sources, messages),
                 workspace=workspace,
                 continuation_id=coordinator["continuation_id"],
                 runtime_env=self._runtime_env(slug, resource_environment, capability),
@@ -972,7 +1046,64 @@ class ProjectSupervisor:
                     {"status": checkpoint_status},
                 ),
             )
+            usage = turn.usage or RuntimeUsage()
+            self.collaboration.finish_run(
+                run_id,
+                status="COMPLETED",
+                summary=turn.decision.summary,
+                turn_id=turn.turn_id,
+                input_tokens=usage.input_tokens,
+                output_tokens=usage.output_tokens,
+                cached_input_tokens=usage.cached_input_tokens,
+                cost_microusd=usage.cost_microusd,
+            )
+        except asyncio.CancelledError:
+            self.collaboration.finish_run(
+                run_id, status="INTERRUPTED", summary="Runtime task was cancelled."
+            )
+            raise
+        except _RuntimeRefreshRequested:
+            self.collaboration.finish_run(
+                run_id,
+                status="INTERRUPTED",
+                summary="Project resources changed during the turn.",
+            )
+            raise
+        except Exception as exc:
+            latest_status = self.service.get_challenge(slug)["coordinator"]["status"]
+            interrupted = latest_status in {"PAUSED", "STOPPED"}
+            error_text = _redact_text(
+                exc.message if isinstance(exc, LiminaError) else str(exc), secret_values
+            )
+            summary = (
+                "The managed turn was interrupted by a lifecycle change."
+                if interrupted
+                else "The managed turn failed before checkpointing."
+            )
+            self._runtime_event(
+                slug,
+                RuntimeEvent(
+                    "runtime.turn_interrupted" if interrupted else "runtime.turn_failed",
+                    summary,
+                    {"error": error_text},
+                ),
+            )
+            self.collaboration.finish_run(
+                run_id,
+                status="INTERRUPTED" if interrupted else "FAILED",
+                summary=summary,
+                error_code=None
+                if interrupted
+                else exc.code
+                if isinstance(exc, LiminaError)
+                else "runtime_error",
+                error_message=None if interrupted else error_text,
+            )
+            if interrupted:
+                raise
+            raise
         finally:
+            self._active_run_ids.pop(slug, None)
             self._capabilities.pop(capability, None)
             heartbeat.cancel()
             with suppress(asyncio.CancelledError):
@@ -1012,10 +1143,21 @@ class ProjectSupervisor:
                 return
 
     def _runtime_event(self, slug: str, event: RuntimeEvent) -> None:
+        run_id = self._active_run_ids.get(slug)
+        payload = {"summary": event.summary, **event.detail}
+        if run_id:
+            payload["run_id"] = run_id
+            method = str(event.detail.get("method", ""))
+            item_type = str(event.detail.get("item_type", ""))
+            self.collaboration.note_run_event(
+                run_id,
+                tool_call=method == "tool/use"
+                or (method == "item/started" and "command" in item_type.lower()),
+            )
         self.service.record_runtime_event(
             slug=slug,
             event_type=event.event_type,
-            payload={"summary": event.summary, **event.detail},
+            payload=payload,
             actor=self.runtime_id,
             command_id=str(uuid4()),
         )
@@ -1099,6 +1241,7 @@ class ProjectSupervisor:
         slug: str,
         files: dict[str, str],
         resources: list[dict[str, Any]],
+        sources: list[dict[str, Any]],
         messages: list[dict[str, Any]],
     ) -> str:
         resource_lines = (
@@ -1118,6 +1261,14 @@ class ProjectSupervisor:
                 for item in messages
             )
             or "- No new human guidance."
+        )
+        source_lines = (
+            "\n".join(
+                f"- {item['type']} {item['name']}: {item['uri']}"
+                + (f" ({item['media_type']})" if item["media_type"] else "")
+                for item in sources
+            )
+            or "- No project sources have been registered."
         )
         return f"""You are Limina, the autonomous research runtime for project `{slug}`.
 
@@ -1147,6 +1298,10 @@ variables by name and disclose their values only to the intended authenticated s
 ## Resources
 
 {resource_lines}
+
+## Sources
+
+{source_lines}
 
 ## New human guidance
 

@@ -52,10 +52,12 @@ live view, and MCP is an agent-native adapter. Both REST and MCP call one `Proje
 layer, so lifecycle side effects, durable guidance, resource refreshes, public projections, and
 redaction rules cannot diverge by transport.
 
-The MCP endpoint uses stateless Streamable HTTP at `/mcp/`. It carries the same instance bearer
-token and accepts `X-Limina-Actor` for attributed team mutations. MCP JSON-RPC request identity is
-not treated as a permanent idempotency namespace; tools accept an optional stable idempotency key,
-and otherwise generate a command ID. Read-only MCP resources project lists, status,
+The MCP endpoint uses stateless Streamable HTTP at `/mcp/`. It carries the same bearer token as
+REST. Local development may use one shared token and `X-Limina-Actor`; team deployments validate
+OIDC/JWT signatures, issuer, audience, expiry, and required claims, then use the signed subject for
+project RBAC. Caller-supplied actor headers cannot override OIDC identity. MCP JSON-RPC request
+identity is not treated as a permanent idempotency namespace; tools accept an optional stable
+idempotency key, and otherwise generate a command ID. Read-only MCP resources project lists, status,
 reviews, H/E/F knowledge, and deterministic Markdown snapshots.
 
 Secret values are intentionally absent from MCP tools because their arguments normally enter a
@@ -88,7 +90,8 @@ redaction, and recovery are provider-independent.
 | Activity | selected turn/item notifications | selected assistant/tool/task messages |
 | Private state | persisted before/at turn execution | persisted as soon as SDK messages expose the session ID |
 
-The runtime is immutable after project creation. Switching a live research graph from one provider
+The runtime is editable during `CREATED` kickoff and immutable after the first start. Switching a
+live research graph from one provider
 continuation model to another would make recovery ambiguous and invalidate behavioral comparisons.
 An engine comparison should be two projects with independent histories and explicit evidence.
 
@@ -128,11 +131,14 @@ destination.
 The database owns:
 
 - project mission, immutable runtime choice, lifecycle, and current objective;
+- project membership and `OWNER`/`EDITOR`/`VIEWER` authorization;
 - the H → E → F research graph and immutable revisions;
 - append-only experiment observations;
 - visible variables and encrypted secrets;
 - asynchronous guidance and acknowledgement;
+- URLs, connectors, bounded uploads, comments, tags, explicit relations, and saved views;
 - a monotonic attributed event stream;
+- structured runtime runs, tool counts, provider usage, failures, and analytics inputs;
 - private provider continuation state and runtime leases;
 - idempotency receipts for every mutation.
 
@@ -253,10 +259,12 @@ shared `LIMINA_SECRET_KEY` from a secrets manager. Losing the key makes existing
 unrecoverable by design.
 
 The co-located key protects against plaintext in database queries, exports, logs, or an isolated
-database backup; it does not protect an attacker with the complete volume and key. The prototype
-public API also uses one bearer token and trusts caller-supplied actor attribution. An
-internet-facing deployment needs TLS, OIDC/JWT, server-derived identity, project roles, an external
-secret manager, and per-project container or microVM isolation.
+database backup; it does not protect an attacker with the complete volume and key. Local
+development may use one shared bearer token. Team deployments use OIDC/JWT with exact issuer and
+audience validation, JWKS key rotation, server-derived identity, and database-backed project roles.
+Browser live attachment uses short-lived, single-use, project-scoped tickets stored only as hashes.
+An internet-facing deployment still needs TLS, an external secret manager, and stronger per-project
+container or microVM isolation.
 
 ## Stack
 
@@ -268,6 +276,7 @@ secret manager, and per-project container or microVM isolation.
 | Public control/live transport | FastAPI REST + WebSocket; official MCP Python SDK for Streamable HTTP |
 | CLI | Typer, Rich, `websockets` |
 | Canonical persistence | PostgreSQL + SQLAlchemy 2 |
+| Knowledge retrieval | PostgreSQL full-text search + explicit graph; SQLite substring fallback |
 | Schema evolution | Alembic |
 | Local/single-node storage | SQLite WAL |
 | Packaging | `uv`, locked `pyproject.toml` |
@@ -279,9 +288,11 @@ contract prevents provider details from leaking into the product interface.
 
 ## Production layers still required
 
-The branch implements the application boundary and a one-command trusted-team deployment. Before
-untrusted multi-tenant exposure, add OIDC/RBAC, a secrets manager, per-project sandbox containers
-or microVMs, object storage, quotas, audit export, metrics/traces, and a transactional outbox.
+The branch implements the application boundary, OIDC/RBAC, browser-safe live access, native run
+observability, analytics, full-text knowledge query, collaboration metadata, and a one-command team
+deployment. Before untrusted multi-tenant exposure, add a secrets manager, per-project sandbox
+containers or microVMs, external object storage, quotas, audit export, infrastructure traces, and a
+transactional outbox.
 
 For horizontal replicas, PostgreSQL leases already prevent duplicate top-level turns. An external
 workflow scheduler may later improve timers and operations, but it must remain an internal Limina

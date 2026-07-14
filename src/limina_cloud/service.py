@@ -29,6 +29,7 @@ from .models import (
     Event,
     InboxMessage,
     Observation,
+    ProjectMember,
     ProjectResource,
     WorkLease,
     utcnow,
@@ -118,6 +119,9 @@ class ChallengeService:
         runtime_engine: str = "codex",
         actor: str,
         command_id: str,
+        owner_subject: str | None = None,
+        owner_display_name: str | None = None,
+        owner_email: str | None = None,
     ) -> dict[str, Any]:
         slug = slug.strip().lower()
         if not SLUG_RE.fullmatch(slug):
@@ -154,6 +158,17 @@ class ChallengeService:
                 blocker="None",
             )
             session.add(coordinator)
+            if owner_subject is not None:
+                session.add(
+                    ProjectMember(
+                        challenge_id=challenge.id,
+                        subject=owner_subject,
+                        role="OWNER",
+                        display_name=owner_display_name or owner_subject,
+                        email=owner_email,
+                        created_by=owner_subject,
+                    )
+                )
             self._record_event(
                 session,
                 challenge=challenge,
@@ -1140,6 +1155,8 @@ class ChallengeService:
                 "Message kind must be STEER, INTERRUPT, ANSWER, APPROVAL, COMMENT, or BLOCKER."
             )
         self._require_text("message", body)
+        if len(body) > 32_768:
+            raise InvariantError("Message must be at most 32768 characters.")
 
         def operation(session: Session) -> dict[str, Any]:
             challenge = self._challenge(session, slug)
@@ -1221,6 +1238,18 @@ class ChallengeService:
             ).all()
             return [self._event_dict(item) for item in items]
 
+    def recent_events(self, slug: str, *, limit: int = 50) -> list[dict[str, Any]]:
+        """Return the newest events in chronological order without a stale forward scan."""
+        with self.database.session() as session:
+            challenge = self._challenge(session, slug)
+            items = session.scalars(
+                select(Event)
+                .where(Event.challenge_id == challenge.id)
+                .order_by(Event.sequence.desc())
+                .limit(min(max(limit, 1), 1000))
+            ).all()
+            return [self._event_dict(item) for item in reversed(items)]
+
     def record_runtime_event(
         self,
         *,
@@ -1266,6 +1295,11 @@ class ChallengeService:
                 with session.begin():
                     receipt = session.get(CommandReceipt, command_id)
                     if receipt is not None:
+                        if receipt.actor != actor:
+                            raise ConflictError(
+                                f"Command ID '{command_id}' belongs to another actor.",
+                                command_id=command_id,
+                            )
                         if receipt.command_type != command_type:
                             raise ConflictError(
                                 f"Command ID '{command_id}' was already used "
@@ -1288,7 +1322,11 @@ class ChallengeService:
                 session.rollback()
                 with self.database.session() as retry_session:
                     receipt = retry_session.get(CommandReceipt, command_id)
-                    if receipt is not None and receipt.command_type == command_type:
+                    if (
+                        receipt is not None
+                        and receipt.command_type == command_type
+                        and receipt.actor == actor
+                    ):
                         return receipt.result  # type: ignore[return-value]
                 raise ConflictError(
                     "The command conflicted with another concurrent write.",

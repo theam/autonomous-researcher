@@ -43,6 +43,13 @@ class AuthenticationError(LiminaError):
         super().__init__(message, "authentication_required", {}, 7, 401)
 
 
+class AuthorizationError(LiminaError):
+    def __init__(
+        self, message: str = "You do not have access to this project.", **details: Any
+    ) -> None:
+        super().__init__(message, "permission_denied", details, 7, 403)
+
+
 class TransportError(LiminaError):
     def __init__(self, message: str, **details: Any) -> None:
         super().__init__(message, "transport_error", details, 8, 503)

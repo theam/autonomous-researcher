@@ -40,8 +40,10 @@ ENV
 docker compose up --build
 ```
 
-Only `LIMINA_API_TOKEN` is required to start the server. A project needs working credentials for
-its selected engine when execution starts. You may configure either provider or both.
+For local development, `LIMINA_API_TOKEN` is the only required control-plane setting. A project
+needs working credentials for its selected engine when execution starts. You may configure either
+provider or both. Team and internet deployments should use OIDC instead of the shared token; see
+[Team authentication](#team-authentication).
 
 The one container applies migrations and starts the API and supervisor. The `limina-data` Docker
 volume preserves the database, project workspaces, private engine continuation data, and the local
@@ -65,9 +67,10 @@ The same server also exposes a versioned REST API and a Streamable HTTP MCP serv
 separate runtimes: CLI, REST, WebSocket, and MCP all call the same project operations and observe
 the same database, event sequence, managed execution loop, and knowledge graph.
 
-Use REST for services and automation. The OpenAPI document is available at `/openapi.json`, with
-an interactive explorer at `/docs`. Every project request uses the instance bearer token.
-Mutations also carry an actor for team attribution and an idempotency key for safe retries:
+Use REST for services and automation. The typed OpenAPI document is available at `/openapi.json`,
+with an interactive explorer at `/docs`. Every project request uses a bearer token. In local mode,
+`X-Limina-Actor` supplies attribution; in OIDC mode Limina derives identity from signed claims and
+ignores that header. Mutations carry an idempotency key for safe retries:
 
 ```bash
 curl -X POST http://127.0.0.1:7433/v1/projects \
@@ -107,8 +110,9 @@ claude mcp add-json --scope user limina \
   '{"type":"http","url":"http://127.0.0.1:7433/mcp/","headers":{"Authorization":"Bearer ${LIMINA_API_TOKEN}","X-Limina-Actor":"${LIMINA_ACTOR}"}}'
 ```
 
-The MCP surface provides tools to create and manage projects, steer strategy, review knowledge,
-read ordered activity, and manage visible variables. It also provides read-only
+The MCP surface provides tools to create and manage projects, preflight kickoff, steer strategy,
+query the knowledge graph, inspect runs and analytics, read ordered activity, and manage visible
+variables and sources. It also provides read-only
 `limina://projects/...` resources for status, reviews, individual H/E/F artifacts, and Markdown
 snapshots. It deliberately does not accept secret values in model-visible tool arguments; set or
 rotate secrets with `limina resource secret` or the authenticated REST endpoint.
@@ -122,6 +126,27 @@ LIMINA_MCP_ALLOWED_HOSTS=limina.example.com docker compose up --build
 If a browser-based MCP client sends an `Origin` header, also set
 `LIMINA_MCP_ALLOWED_ORIGINS=https://your-client.example.com`. TLS remains required outside a
 trusted local network.
+
+### UI-ready project surfaces
+
+REST and MCP share one authorization and operation layer. The backend exposes the primitives a UI
+needs without requiring it to understand provider sessions:
+
+- editable project kickoff drafts, built-in templates, preflight checks, memberships, and roles;
+- durable guidance bodies with actor, delivery, pending/acknowledged state, and timestamps;
+- paginated project, review, event, run, and knowledge queries;
+- PostgreSQL full-text search with a portable SQLite fallback;
+- H → E → F nodes, revisions, explicit relations/backlinks, comments, tags, and saved views;
+- registered URLs, connectors, and bounded project-workspace uploads;
+- structured runtime runs with status, duration, model, tool activity, errors, and provider usage
+  or cost when the SDK supplies it;
+- aggregate and daily time-series analytics for runs, knowledge throughput, and human-response
+  latency;
+- one-time live tickets so browser WebSockets do not put long-lived bearer tokens in URLs.
+
+Semantic/vector retrieval is deliberately a later search backend. Full-text search and explicit
+relations provide deterministic relevance and graph semantics first, without inventing embedding
+infrastructure before there is evidence it improves project review.
 
 ## Create a project
 
@@ -145,9 +170,10 @@ limina project create retrieval-claude \
   --context "The current baseline combines BM25 with embeddings"
 ```
 
-The runtime is immutable for a project. This keeps its workspace, continuation history, audit
-trail, and behavior coherent. Create another project when you want an independent run or an
-engine comparison. Creating records the brief; execution starts only when you say so.
+The runtime and kickoff brief may be edited while the project is still `CREATED`. They become
+immutable at the first start, which keeps the workspace, continuation history, audit trail, and
+behavior coherent. Create another project when you want an independent run or an engine
+comparison. Creating records the brief; execution starts only when you say so.
 
 ## Provide resources
 
@@ -191,7 +217,8 @@ restart reconstructs active project loops and resumes each provider's private co
 
 ## Collaborate
 
-Every teammate connects to the same instance and supplies an identity for attribution:
+Every teammate connects to the same instance. A local shared-token instance accepts an attribution
+name; an OIDC instance derives the teammate identity and project role from authenticated state:
 
 ```bash
 export LIMINA_URL=https://limina.example.com
@@ -349,15 +376,35 @@ and ordered human guidance.
 
 ## Security boundary
 
-The default instance uses one bearer token and a generated Fernet key stored in the persistent
-volume with restrictive permissions. This is suitable for a trusted team deployment, not an
-untrusted multi-tenant service. Before internet exposure:
+The shared token is a local-development mode. Team deployments use provider-neutral OIDC discovery,
+JWKS signature verification, issuer/audience/expiry validation, server-derived identity, and
+project `OWNER`, `EDITOR`, and `VIEWER` roles. Configure it in `.env`:
 
-- terminate the API behind TLS;
-- replace the shared token with OIDC and project-level RBAC;
-- load `LIMINA_SECRET_KEY` from a secrets manager;
-- isolate project workspaces with containers or microVMs;
-- add quotas, audit export, object storage, and operational telemetry.
+```dotenv
+LIMINA_OIDC_ISSUER=https://identity.example.com
+LIMINA_OIDC_AUDIENCE=limina-api
+# Optional when discovery does not advertise the desired endpoint:
+# LIMINA_OIDC_JWKS_URL=https://identity.example.com/.well-known/jwks.json
+# Optional instance administrator mapping:
+# LIMINA_OIDC_ADMIN_CLAIM=roles
+# LIMINA_OIDC_ADMIN_VALUE=limina-admin
+# Optional 0-300 second clock-skew tolerance (default 30):
+# LIMINA_OIDC_LEEWAY_SECONDS=30
+LIMINA_CORS_ORIGINS=https://limina-ui.example.com
+```
+
+Then run the same command: `docker compose up --build`. Do not set `LIMINA_API_TOKEN` in OIDC
+mode. Limina refuses a non-local bind unless one of these authentication modes is configured.
+
+Terminate the API behind TLS. For an untrusted multi-tenant service, also load
+`LIMINA_SECRET_KEY` from a secrets manager, isolate project workspaces with containers or
+microVMs, and add quotas, external object storage, and audit export. Native run telemetry and
+analytics diagnose Limina work; infrastructure logs/traces should still be exported by the
+deployment platform.
+
+Registered `URL` sources must use HTTP or HTTPS. URL and connector URIs cannot embed credentials
+in user-info or credential-like query parameters; keep those values in write-only encrypted
+project secrets.
 
 The managed model process does not receive the database URL or Limina administrative token. It
 gets a short-lived capability scoped to the active project. See the
@@ -386,6 +433,7 @@ Further reading:
 
 - [CLI user story](docs/cloud-runtime-cli.md)
 - [Architecture and concurrency model](docs/cloud-runtime-architecture.md)
+- [UI-ready backend and API map](docs/ui-ready-backend.md)
 - [Verification evidence](docs/cloud-runtime-evidence.md)
 
 ## Contributing

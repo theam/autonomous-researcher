@@ -729,8 +729,13 @@ def serve(
     token: Annotated[str | None, typer.Option("--token", envvar="LIMINA_API_TOKEN")] = None,
 ) -> None:
     """Run a complete Limina instance, including all managed project runtimes."""
-    if host not in {"127.0.0.1", "localhost", "::1"} and not token:
-        raise typer.BadParameter("a token is required for a non-local bind")
+    oidc_configured = bool(
+        os.environ.get("LIMINA_OIDC_ISSUER") and os.environ.get("LIMINA_OIDC_AUDIENCE")
+    )
+    if host not in {"127.0.0.1", "localhost", "::1"} and not token and not oidc_configured:
+        raise typer.BadParameter(
+            "a shared token or OIDC configuration is required for a non-local bind"
+        )
     uvicorn.run(
         create_app(
             database_url=database_url,
