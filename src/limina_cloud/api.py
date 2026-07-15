@@ -23,18 +23,21 @@ from fastapi import (
     WebSocket,
     WebSocketDisconnect,
 )
-from fastapi.encoders import jsonable_encoder
-from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from . import __version__
-from .auth import Authenticator, Principal, authenticator_from_environment
+from .api_errors import register_error_handlers
+from .auth import (
+    Authenticator,
+    Principal,
+    RateLimitedAuthenticator,
+    authenticator_from_environment,
+)
 from .database import Database
-from .engines import SUPPORTED_RUNTIME_ENGINES
-from .errors import AuthenticationError, InvariantError, LiminaError
+from .errors import AuthenticationError, AuthorizationError, InvariantError, LiminaError
 from .exporter import MarkdownExporter
+from .internal_api import register_internal_agent_routes
 from .mcp import create_mcp_server
 from .operations import (
     ACTOR_LIMIT,
@@ -43,7 +46,9 @@ from .operations import (
     public_event,
     public_status,
 )
+from .rate_limit import FailureRateLimiter
 from .runtime import AgentFactory, ProjectSupervisor
+from .runtime_api import register_runtime_admin_routes
 from .schemas import (
     AnalyticsResponse,
     ArtifactResponse,
@@ -52,22 +57,14 @@ from .schemas import (
     CreateProjectRequest,
     ErrorResponse,
     EventPage,
-    ExperimentClaimRequest,
-    ExperimentCompletionRequest,
-    ExperimentRequest,
-    FindingRequest,
     GuidancePage,
     GuidanceReceipt,
-    HealthResponse,
-    HypothesisDecisionRequest,
-    HypothesisRequest,
     KickoffTemplate,
     KnowledgeGraphResponse,
     KnowledgePage,
     LiveTicketResponse,
     MemberRequest,
     MemberResponse,
-    ObservationRequest,
     PreflightResponse,
     ProjectPage,
     ProjectResponse,
@@ -125,6 +122,7 @@ def create_app(
     *,
     database_url: str | None = None,
     token: str | None = None,
+    admin_token: str | None = None,
     authenticator: Authenticator | None = None,
     workspace_root: Path | None = None,
     agent_factory: AgentFactory | None = None,
@@ -142,12 +140,22 @@ def create_app(
     resolved_key_path = secret_key_path or Path(
         os.environ.get("LIMINA_SECRET_KEY_PATH", resolved_workspace.parent / "secret.key")
     )
+    base_authenticator = authenticator or authenticator_from_environment(
+        local_token=token if token is not None else os.environ.get("LIMINA_API_TOKEN"),
+        local_admin_token=admin_token
+        if admin_token is not None
+        else os.environ.get("LIMINA_ADMIN_API_TOKEN") or None,
+    )
+    transport_authenticator = RateLimitedAuthenticator(
+        base_authenticator,
+        FailureRateLimiter(
+            limit=int(os.environ.get("LIMINA_GLOBAL_AUTH_FAILURE_LIMIT", "1000")),
+            window_seconds=int(os.environ.get("LIMINA_AUTH_FAILURE_WINDOW_SECONDS", "60")),
+        ),
+    )
     runtime = RuntimeContext(
         database,
-        authenticator
-        or authenticator_from_environment(
-            local_token=token if token is not None else os.environ.get("LIMINA_API_TOKEN")
-        ),
+        transport_authenticator,
         workspace_root=resolved_workspace,
         agent_factory=agent_factory,
         poll_interval=poll_interval,
@@ -203,35 +211,28 @@ def create_app(
         )
     bearer = HTTPBearer(auto_error=False)
     bearer_dependency = Depends(bearer)
+    auth_limiter = FailureRateLimiter(
+        limit=int(os.environ.get("LIMINA_AUTH_FAILURE_LIMIT", "10")),
+        window_seconds=int(os.environ.get("LIMINA_AUTH_FAILURE_WINDOW_SECONDS", "60")),
+    )
 
-    @app.exception_handler(LiminaError)
-    async def handle_limina_error(_request: Request, exc: LiminaError) -> JSONResponse:
-        return JSONResponse(
-            status_code=exc.http_status,
-            content={"error": {"code": exc.code, "message": exc.message, "details": exc.details}},
-        )
-
-    @app.exception_handler(RequestValidationError)
-    async def handle_validation_error(
-        _request: Request, exc: RequestValidationError
-    ) -> JSONResponse:
-        return JSONResponse(
-            status_code=422,
-            content={
-                "error": {
-                    "code": "invalid_request",
-                    "message": "The request did not match the API contract.",
-                    "details": {"errors": jsonable_encoder(exc.errors())},
-                }
-            },
-        )
+    register_error_handlers(app)
 
     def require_auth(
+        request: Request,
         credentials: HTTPAuthorizationCredentials | None = bearer_dependency,
         x_limina_actor: Annotated[str | None, Header(max_length=ACTOR_LIMIT)] = None,
     ) -> Principal:
         token_value = credentials.credentials if credentials is not None else None
-        return runtime.authenticator.authenticate(token_value, actor_hint=x_limina_actor)
+        key = request.client.host if request.client else "unknown"
+        auth_limiter.check(key)
+        try:
+            principal = runtime.authenticator.authenticate(token_value, actor_hint=x_limina_actor)
+        except AuthenticationError:
+            auth_limiter.failure(key)
+            raise
+        auth_limiter.success(key)
+        return principal
 
     def command_headers(
         idempotency_key: Annotated[str, Header(min_length=1, max_length=PUBLIC_COMMAND_ID_LIMIT)],
@@ -240,6 +241,13 @@ def create_app(
 
     principal_dependency = Depends(require_auth)
     command_dependency = Depends(command_headers)
+
+    def require_instance_admin(principal: Principal = principal_dependency) -> Principal:
+        if not principal.instance_admin:
+            raise AuthorizationError("Instance administrator access is required.")
+        return principal
+
+    instance_admin_dependency = Depends(require_instance_admin)
 
     def internal_actor(
         slug: str,
@@ -264,18 +272,17 @@ def create_app(
         404: {"model": ErrorResponse},
         409: {"model": ErrorResponse},
         422: {"model": ErrorResponse},
+        429: {"model": ErrorResponse},
     }
 
-    @app.get("/healthz", response_model=HealthResponse, responses=public_errors)
-    def health(_principal: Principal = principal_dependency) -> dict[str, Any]:
-        return {
-            "ok": True,
-            "version": __version__,
-            "runtime_owner": "limina",
-            "auth_mode": runtime.authenticator.mode,
-            "runtimes": list(SUPPORTED_RUNTIME_ENGINES),
-            "interfaces": {"rest": "/v1", "mcp": "/mcp/"},
-        }
+    register_runtime_admin_routes(
+        app,
+        runtime,
+        principal_dependency=principal_dependency,
+        instance_admin_dependency=instance_admin_dependency,
+        command_dependency=command_dependency,
+        public_errors=public_errors,
+    )
 
     @app.post(
         "/v1/projects",
@@ -864,8 +871,22 @@ def create_app(
 
     @app.websocket("/v1/projects/{slug}/live")
     async def project_live(websocket: WebSocket, slug: str) -> None:
+        protocols = list(websocket.scope.get("subprotocols", []))
+        if "limina.v1" not in protocols:
+            await websocket.close(code=4400, reason="The limina.v1 subprotocol is required.")
+            return
+        ticket_protocols = [
+            item.removeprefix("limina.ticket.")
+            for item in protocols
+            if item.startswith("limina.ticket.")
+        ]
+        if len(ticket_protocols) > 1:
+            await websocket.close(code=4400, reason="Only one live ticket may be supplied.")
+            return
+        ticket = ticket_protocols[0] if ticket_protocols else None
+        auth_key = websocket.client.host if websocket.client else "unknown"
         try:
-            ticket = websocket.query_params.get("ticket")
+            auth_limiter.check(auth_key)
             if ticket:
                 principal, role = runtime.operations.collaboration.consume_live_ticket(slug, ticket)
             else:
@@ -881,11 +902,14 @@ def create_app(
                 role = runtime.operations.collaboration.require_role(slug, principal, "VIEWER")
             initial = public_status(runtime.service.status(slug))
         except LiminaError as exc:
+            if exc.http_status == 401 or ticket:
+                auth_limiter.failure(auth_key)
             await websocket.close(
                 code=4403 if exc.http_status == 403 else 4401, reason=exc.message[:120]
             )
             return
-        await websocket.accept()
+        auth_limiter.success(auth_key)
+        await websocket.accept(subprotocol="limina.v1")
         cursor_text = websocket.query_params.get("after", "0")
         try:
             cursor = max(0, int(cursor_text))
@@ -956,143 +980,11 @@ def create_app(
                 {"type": "error", "value": {"code": exc.code, "message": exc.message}}
             )
 
-    @app.get("/internal/v1/projects/{slug}/status", include_in_schema=False)
-    def internal_status(slug: str, _actor: str = Depends(internal_actor)) -> dict[str, Any]:
-        return runtime.service.status(slug)
-
-    @app.get("/internal/v1/projects/{slug}/artifacts", include_in_schema=False)
-    def internal_artifacts(
-        slug: str,
-        _actor: str = Depends(internal_actor),
-        kind: str | None = Query(default=None),
-    ) -> list[dict[str, Any]]:
-        return runtime.service.list_artifacts(slug, kind)
-
-    @app.get("/internal/v1/projects/{slug}/artifacts/{artifact_id}", include_in_schema=False)
-    def internal_artifact(
-        slug: str,
-        artifact_id: str,
-        _actor: str = Depends(internal_actor),
-    ) -> dict[str, Any]:
-        return runtime.service.get_artifact(slug, artifact_id)
-
-    @app.post("/internal/v1/projects/{slug}/hypotheses", status_code=201, include_in_schema=False)
-    def internal_create_hypothesis(
-        slug: str,
-        body: HypothesisRequest,
-        actor: str = Depends(internal_actor),
-        command_id: str = Depends(internal_command_id),
-    ) -> dict[str, Any]:
-        return runtime.service.create_hypothesis(
-            slug=slug,
-            **body.model_dump(),
-            actor=actor,
-            command_id=command_id,
-        )
-
-    @app.post(
-        "/internal/v1/projects/{slug}/hypotheses/{artifact_id}/decision",
-        include_in_schema=False,
+    register_internal_agent_routes(
+        app,
+        runtime,
+        internal_actor=internal_actor,
+        internal_command_id=internal_command_id,
     )
-    def internal_decide_hypothesis(
-        slug: str,
-        artifact_id: str,
-        body: HypothesisDecisionRequest,
-        actor: str = Depends(internal_actor),
-        command_id: str = Depends(internal_command_id),
-    ) -> dict[str, Any]:
-        return runtime.service.decide_hypothesis(
-            slug=slug,
-            artifact_id=artifact_id,
-            **body.model_dump(),
-            actor=actor,
-            command_id=command_id,
-        )
-
-    @app.post("/internal/v1/projects/{slug}/experiments", status_code=201, include_in_schema=False)
-    def internal_create_experiment(
-        slug: str,
-        body: ExperimentRequest,
-        actor: str = Depends(internal_actor),
-        command_id: str = Depends(internal_command_id),
-    ) -> dict[str, Any]:
-        return runtime.service.create_experiment(
-            slug=slug,
-            **body.model_dump(),
-            actor=actor,
-            command_id=command_id,
-        )
-
-    @app.post(
-        "/internal/v1/projects/{slug}/experiments/{artifact_id}/claim",
-        include_in_schema=False,
-    )
-    def internal_claim_experiment(
-        slug: str,
-        artifact_id: str,
-        body: ExperimentClaimRequest,
-        actor: str = Depends(internal_actor),
-        command_id: str = Depends(internal_command_id),
-    ) -> dict[str, Any]:
-        return runtime.service.claim_experiment(
-            slug=slug,
-            artifact_id=artifact_id,
-            ttl_seconds=body.ttl_seconds,
-            actor=actor,
-            command_id=command_id,
-        )
-
-    @app.post(
-        "/internal/v1/projects/{slug}/experiments/{artifact_id}/observations",
-        status_code=201,
-        include_in_schema=False,
-    )
-    def internal_observe_experiment(
-        slug: str,
-        artifact_id: str,
-        body: ObservationRequest,
-        actor: str = Depends(internal_actor),
-        command_id: str = Depends(internal_command_id),
-    ) -> dict[str, Any]:
-        return runtime.service.append_observation(
-            slug=slug,
-            artifact_id=artifact_id,
-            **body.model_dump(),
-            actor=actor,
-            command_id=command_id,
-        )
-
-    @app.post(
-        "/internal/v1/projects/{slug}/experiments/{artifact_id}/complete",
-        include_in_schema=False,
-    )
-    def internal_complete_experiment(
-        slug: str,
-        artifact_id: str,
-        body: ExperimentCompletionRequest,
-        actor: str = Depends(internal_actor),
-        command_id: str = Depends(internal_command_id),
-    ) -> dict[str, Any]:
-        return runtime.service.complete_experiment(
-            slug=slug,
-            artifact_id=artifact_id,
-            **body.model_dump(),
-            actor=actor,
-            command_id=command_id,
-        )
-
-    @app.post("/internal/v1/projects/{slug}/findings", status_code=201, include_in_schema=False)
-    def internal_publish_finding(
-        slug: str,
-        body: FindingRequest,
-        actor: str = Depends(internal_actor),
-        command_id: str = Depends(internal_command_id),
-    ) -> dict[str, Any]:
-        return runtime.service.publish_finding(
-            slug=slug,
-            **body.model_dump(),
-            actor=actor,
-            command_id=command_id,
-        )
 
     return app

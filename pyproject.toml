@@ -42,6 +42,7 @@ limina = "limina_cloud.cli:main"
 
 [dependency-groups]
 dev = [
+  "python-frontmatter>=1.1,<2",
   "ruff>=0.12,<1",
 ]
 

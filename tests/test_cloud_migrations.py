@@ -37,7 +37,7 @@ class CloudMigrationTests(unittest.TestCase):
                 self.assertIn("alembic_version", tables)
                 with engine.connect() as connection:
                     revision = connection.scalar(text("SELECT version_num FROM alembic_version"))
-                self.assertEqual(revision, "7e4a19b8d2c6")
+                self.assertEqual(revision, "1f6a2c8d9e10")
                 self.assertTrue(
                     {
                         "project_members",

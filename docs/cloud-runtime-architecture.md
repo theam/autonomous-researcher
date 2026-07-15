@@ -104,6 +104,14 @@ before tools run, supplies a JSON output schema, streams selected notifications,
 active turn handle for steering and lifecycle interruption. In the Docker image, `CODEX_HOME` is
 stored on the Limina volume so local thread data survives container replacement.
 
+Limina owns the Codex credential lifecycle as well as its sessions. On a fresh volume it creates a
+private `CODEX_HOME`. In API-key or access-token mode it feeds the server credential through the
+official login path, then removes the raw credential from every project child environment. In
+ChatGPT mode an instance administrator starts a device login through the CLI or REST API. Login and
+logout take an exclusive authentication lock; turns take shared locks, and ChatGPT-backed turns
+are serialized on a single runtime node to avoid refresh-token races. API-key mode remains the
+parallel-workload option.
+
 ### Claude Code adapter
 
 The official [Claude Agent SDK for Python](https://platform.claude.com/docs/en/agent-sdk/python)
@@ -138,7 +146,8 @@ The database owns:
 - asynchronous guidance and acknowledgement;
 - URLs, connectors, bounded uploads, comments, tags, explicit relations, and saved views;
 - a monotonic attributed event stream;
-- structured runtime runs, tool counts, provider usage, failures, and analytics inputs;
+- structured runtime runs, retry ordinals, per-turn token usage, cost provenance, failures, and
+  analytics inputs;
 - private provider continuation state and runtime leases;
 - idempotency receipts for every mutation.
 
@@ -263,6 +272,8 @@ database backup; it does not protect an attacker with the complete volume and ke
 development may use one shared bearer token. Team deployments use OIDC/JWT with exact issuer and
 audience validation, JWKS key rotation, server-derived identity, and database-backed project roles.
 Browser live attachment uses short-lived, single-use, project-scoped tickets stored only as hashes.
+Tickets travel in a WebSocket subprotocol rather than a URL. Failed authentication is rate-limited
+across REST, WebSocket, and MCP. Local project and instance-administrator tokens are distinct.
 An internet-facing deployment still needs TLS, an external secret manager, and stronger per-project
 container or microVM isolation.
 

@@ -230,7 +230,10 @@ class UiReadinessTests(unittest.TestCase):
         )
         self.assertEqual(ticket.status_code, 200, ticket.text)
         value = ticket.json()["ticket"]
-        with self.client.websocket_connect(f"/v1/projects/ui-ready/live?ticket={value}") as socket:
+        with self.client.websocket_connect(
+            "/v1/projects/ui-ready/live",
+            subprotocols=["limina.v1", f"limina.ticket.{value}"],
+        ) as socket:
             self.assertEqual(socket.receive_json()["type"], "snapshot")
             socket.send_json({"type": "steer", "body": "Try to mutate."})
             error = socket.receive_json()
@@ -241,7 +244,10 @@ class UiReadinessTests(unittest.TestCase):
 
         with (
             self.assertRaises(WebSocketDisconnect),
-            self.client.websocket_connect(f"/v1/projects/ui-ready/live?ticket={value}"),
+            self.client.websocket_connect(
+                "/v1/projects/ui-ready/live",
+                subprotocols=["limina.v1", f"limina.ticket.{value}"],
+            ),
         ):
             pass
 
@@ -249,7 +255,8 @@ class UiReadinessTests(unittest.TestCase):
             "/v1/projects/ui-ready/live-ticket", headers=self.auth("admin-token")
         ).json()["ticket"]
         with self.client.websocket_connect(
-            f"/v1/projects/ui-ready/live?ticket={admin_ticket}"
+            "/v1/projects/ui-ready/live",
+            subprotocols=["limina.v1", f"limina.ticket.{admin_ticket}"],
         ) as socket:
             self.assertEqual(socket.receive_json()["type"], "snapshot")
             socket.send_json({"type": "steer", "body": "Review the current strategy."})

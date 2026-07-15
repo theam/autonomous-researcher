@@ -6,6 +6,7 @@
 |---|---|---|
 | Limina owns execution | API lifespan recovers active projects; supervisor selects and owns SDK sessions | supervisor ownership and lifecycle tests |
 | Codex and Claude Code are selectable | immutable runtime column plus validated public `runtime` field | service, API, CLI, migration tests |
+| Limina owns Codex login state | private `CODEX_HOME`, API-key/access-token materialization, and administrator-driven ChatGPT device login | auth lifecycle, permission, concurrency, and fresh-volume live tests |
 | Users do not manage provider machinery | public CLI/OpenAPI expose project concepts; serializers remove private state | public-surface and sanitized-status tests |
 | Agents use the same public boundary | authenticated MCP tools/resources call the shared project operation layer | MCP discovery, cross-transport, attribution, and resource tests |
 | Team identity and roles are enforced | OIDC/JWT claims create principals; project membership gates every shared operation | signed-token, anti-spoofing, membership, and role tests |
@@ -22,6 +23,8 @@
 | Parallel KB writes are safe | atomic IDs, per-experiment leases, append-only observations, CAS transitions | concurrency and stale-write tests |
 | Knowledge is queryable and visualizable | PostgreSQL FTS, paginated filters, graph relations, tags, comments, revisions, and saved views | UI-readiness API and migration tests |
 | Runtime work is observable | every managed turn has a correlated run record with timing, events, errors, tools, and available usage | supervisor run, run detail, and analytics tests |
+| Usage and cost are not conflated | per-turn provider usage and separate provider/operator-rate provenance | resumed-thread usage, pricing, migration, API, and live Codex tests |
+| Transient provider failures recover durably | typed retry classification, attempt-per-run records, persisted wake time, and bounded backoff | retry/recovery tests |
 | Public diagnostics stay product-level | run events use the same sanitizer as activity/live views; receipts are scoped to signed subjects | internal-field redaction, duplicate-display-name, and cross-project replay tests |
 | Export remains portable | deterministic snapshot passes the existing KB validator | export validation test |
 | Schema upgrades preserve Codex projects | migration defaults old projects to Codex and renames private continuity state | upgrade/downgrade and preservation tests |
@@ -129,6 +132,37 @@ The official SDK was exercised against an actual Limina server:
 The first attempt found an environment-isolation defect: blanking Codex origin metadata prevented
 SDK initialization. The allow-list now retains required, non-secret Codex metadata while blanking
 database, admin-token, and unrelated values. A regression test covers that boundary.
+
+### Fresh-volume Codex authentication and telemetry acceptance — 2026-07-15
+
+[[E002]] rebuilt the current image and started an isolated Compose project with a fresh named
+volume. The previously supplied API key entered the test through no-echo process input, was never a
+command argument, and was removed with the container and volume after the run. Only public Limina
+CLI commands created and started the project; there was no directory repair or manual `codex login`.
+
+The first managed turn completed in 51,192 ms with `gpt-5.4`, 24 tool calls, no retry, and a durable
+H→E→F chain. The provider reported 19,824 input, 18,816 cached-input, 217 output, 90 reasoning-output,
+and 20,041 total tokens. `usage_source=provider`; cost and `cost_source` were null because no operator
+price was configured. This is the intended honest state rather than an inferred provider price.
+
+Post-run checks found no credential pattern in durable project events, found the Codex state
+directory at mode `0700` and `auth.json` at `0600`, and found no residual test container or volume.
+The complete finding matrix and raw summary are under `kb/research/data/E002/`.
+
+The same acceptance run exercised the automated suite:
+
+```text
+Ran 77 tests in 4.720s
+
+OK
+KB validation passed.
+```
+
+ChatGPT account login is available through `limina runtime codex login --method chatgpt` and the
+instance-administrator REST flow. Device start/poll/cancel and auth/turn exclusion are covered by
+the pinned SDK contract tests. Completing the browser code was intentionally not part of the
+API-key trial; cached ChatGPT credentials remain single-runtime-node state and serialize Codex
+turns, as documented in the deployment contract.
 
 ## Claude Code adapter evidence
 

@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import jwt
 from cryptography.hazmat.primitives.asymmetric import rsa
 
-from limina_cloud.auth import OidcAuthenticator
+from limina_cloud.auth import LocalAuthenticator, OidcAuthenticator
 from limina_cloud.errors import AuthenticationError
 
 
@@ -62,6 +62,28 @@ class OidcAuthenticationTests(unittest.TestCase):
             self.authenticator.authenticate(
                 self.token(exp=datetime.now(UTC) - timedelta(seconds=60))
             )
+
+
+class LocalAuthenticationTests(unittest.TestCase):
+    def test_project_and_instance_tokens_have_distinct_authority(self) -> None:
+        authenticator = LocalAuthenticator("project-token", "admin-token")
+        project_user = authenticator.authenticate("project-token", actor_hint="researcher")
+        administrator = authenticator.authenticate("admin-token", actor_hint="operator")
+
+        self.assertTrue(project_user.project_admin)
+        self.assertFalse(project_user.instance_admin)
+        self.assertTrue(administrator.project_admin)
+        self.assertTrue(administrator.instance_admin)
+
+    def test_equal_project_and_instance_tokens_are_rejected(self) -> None:
+        with self.assertRaises(RuntimeError):
+            LocalAuthenticator("same", "same")
+
+    def test_non_ascii_invalid_token_is_rejected_without_a_type_error(self) -> None:
+        authenticator = LocalAuthenticator("project-token", "admin-token")
+
+        with self.assertRaises(AuthenticationError):
+            authenticator.authenticate("not-the-token-é")
 
 
 if __name__ == "__main__":

@@ -50,6 +50,17 @@ class AuthorizationError(LiminaError):
         super().__init__(message, "permission_denied", details, 7, 403)
 
 
+class RateLimitError(LiminaError):
+    def __init__(self, *, retry_after_seconds: int) -> None:
+        super().__init__(
+            "Too many failed authentication attempts.",
+            "rate_limited",
+            {"retry_after_seconds": retry_after_seconds},
+            9,
+            429,
+        )
+
+
 class TransportError(LiminaError):
     def __init__(self, message: str, **details: Any) -> None:
         super().__init__(message, "transport_error", details, 8, 503)

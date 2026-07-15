@@ -59,6 +59,32 @@ class FakeAgentSession:
         await self.interrupt()
 
 
+class FakeCodexAuth:
+    def __init__(self) -> None:
+        self.logged_out = False
+
+    @staticmethod
+    def status():
+        return {
+            "engine": "codex",
+            "configured_mode": "auto",
+            "configured": False,
+            "active_method": None,
+            "account_email": None,
+            "account_plan": None,
+            "source": "none",
+            "error": None,
+            "single_runtime_node": True,
+        }
+
+    def logout(self):
+        self.logged_out = True
+        return self.status()
+
+    def close(self) -> None:
+        return None
+
+
 class CloudApiTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
@@ -67,13 +93,17 @@ class CloudApiTests(unittest.TestCase):
         self.app = create_app(
             database_url=database_url,
             token="secret",
+            admin_token="admin-secret",
             workspace_root=Path(self.temp_dir.name) / "workspaces",
             agent_factory=lambda _slug, _engine: self.session,
             poll_interval=0.01,
         )
+        self.app.state.runtime.supervisor.codex_auth.close()
+        self.app.state.runtime.supervisor.codex_auth = FakeCodexAuth()
         self.client_context = TestClient(self.app)
         self.client = self.client_context.__enter__()
         self.auth = {"Authorization": "Bearer secret"}
+        self.admin_auth = {"Authorization": "Bearer admin-secret"}
 
     def tearDown(self) -> None:
         self.client_context.__exit__(None, None, None)
@@ -102,6 +132,8 @@ class CloudApiTests(unittest.TestCase):
         )
 
     def test_authentication_and_public_surface(self) -> None:
+        self.assertEqual(self.client.get("/livez").status_code, 200)
+        self.assertEqual(self.client.get("/readyz").status_code, 200)
         self.assertEqual(self.client.get("/healthz").status_code, 401)
         response = self.client.get("/healthz", headers=self.auth)
         self.assertEqual(response.status_code, 200)
@@ -113,6 +145,21 @@ class CloudApiTests(unittest.TestCase):
         paths = " ".join(schema["paths"])
         for forbidden in ("worker", "thread", "session", "coordinator", "lease"):
             self.assertNotIn(forbidden, paths)
+
+    def test_failed_authentication_is_rate_limited(self) -> None:
+        invalid = {"Authorization": "Bearer wrong"}
+        for _ in range(10):
+            self.assertEqual(self.client.get("/healthz", headers=invalid).status_code, 401)
+        limited = self.client.get("/healthz", headers=invalid)
+        self.assertEqual(limited.status_code, 429)
+        self.assertGreaterEqual(limited.json()["error"]["details"]["retry_after_seconds"], 1)
+
+    def test_runtime_authentication_requires_the_distinct_admin_token(self) -> None:
+        path = "/v1/runtime/engines/codex/auth"
+        self.assertEqual(self.client.get(path, headers=self.auth).status_code, 403)
+        status = self.client.get(path, headers=self.admin_auth)
+        self.assertEqual(status.status_code, 200, status.text)
+        self.assertFalse(status.json()["configured"])
 
     def test_project_lifecycle_resources_and_sanitized_status(self) -> None:
         replay_key = str(uuid4())
@@ -212,6 +259,7 @@ class CloudApiTests(unittest.TestCase):
         with self.client.websocket_connect(
             "/v1/projects/cloud-test/live",
             headers={**self.auth, "X-Limina-Actor": "reviewer"},
+            subprotocols=["limina.v1"],
         ) as socket:
             snapshot = socket.receive_json()
             self.assertEqual(snapshot["type"], "snapshot")

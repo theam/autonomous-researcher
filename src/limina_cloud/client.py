@@ -151,6 +151,26 @@ class HttpRuntimeClient:
     def health(self) -> dict[str, Any]:
         return self._request("GET", "/healthz")
 
+    def codex_auth_status(self) -> dict[str, Any]:
+        return self._request("GET", "/v1/runtime/engines/codex/auth")
+
+    def codex_login(self, method: str, *, command_id: str) -> dict[str, Any]:
+        return self._request(
+            "POST",
+            "/v1/runtime/engines/codex/auth/login",
+            {"method": method},
+            command_id=command_id,
+        )
+
+    def codex_login_attempt(self, login_id: str) -> dict[str, Any]:
+        return self._request("GET", f"/v1/runtime/engines/codex/auth/login/{login_id}")
+
+    def cancel_codex_login(self, login_id: str) -> dict[str, Any]:
+        return self._request("DELETE", f"/v1/runtime/engines/codex/auth/login/{login_id}")
+
+    def codex_logout(self) -> dict[str, Any]:
+        return self._request("DELETE", "/v1/runtime/engines/codex/auth")
+
     def create_project(
         self, payload: dict[str, Any], *, actor: str, command_id: str
     ) -> dict[str, Any]:

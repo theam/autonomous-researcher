@@ -7,23 +7,19 @@ type: active-state
 
 ## Current Objective
 
-Ship a UI-ready Limina-owned supervisor with selectable Codex and Claude Code runtimes, one
-authorization boundary, queryable knowledge, structured run observability, analytics, and coherent
-CLI, REST, WebSocket, and MCP project contracts.
+Prepare a bounded trusted internal PoC using the now-hardened managed Codex runtime while keeping
+production, Claude Code, and multi-replica claims behind their own evidence gates.
 
 ## Next Step
 
-Build the UI against the typed project API without exposing provider sessions. When Anthropic
-credentials are available, record a live Claude Code restart-and-steering smoke test; before an
-untrusted production deployment, choose the workspace isolation, object storage, key management,
-quota, and audit-export services described in the backend rationale.
+Select two or three real internal Codex missions and define cohort success/stop criteria. Create a
+separate experiment for live Claude Code or OIDC/PostgreSQL validation before claiming either.
 
 ## Blocker
 
-No application implementation blocker. Live Claude Code provider behavior is covered by an SDK
-contract test but has not yet been exercised against the Anthropic API; that proof requires valid
-provider credentials. Production infrastructure choices remain deployment work, not UI contract
-gaps.
+No implementation blocker. A cohort mission/data choice is required for the next research cycle.
+The reused OpenAI key should be rotated because it was supplied in chat, even though the bounded
+runtime test did not persist or disclose it in repository, event, container, or volume state.
 
 ## Links
 
@@ -32,3 +28,9 @@ gaps.
 - Evidence: [Managed runtime verification](../docs/cloud-runtime-evidence.md)
 - UI-ready backend: [Implementation and rationale](../docs/ui-ready-backend.md)
 - Lesson: [UI-ready control-plane boundaries](lessons/ui-ready-control-plane.md)
+- Hypothesis: [[H001]]
+- Completed experiment: [[E001]]
+- Enterprise evaluator report: [Claude Fable review](../docs/reviews/claude-fable-enterprise-evaluation-2026-07-15.md)
+- Confirmed remediation hypothesis: [[H002]]
+- Completed remediation experiment: [[E002]]
+- Release finding: [[F002]]

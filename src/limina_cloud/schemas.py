@@ -30,6 +30,32 @@ class HealthResponse(StrictModel):
     interfaces: dict[str, str]
 
 
+class CodexAuthLoginRequest(StrictModel):
+    method: Literal["chatgpt", "api-key", "access-token"] = "chatgpt"
+
+
+class CodexAuthStatus(StrictModel):
+    engine: Literal["codex"]
+    configured_mode: str
+    configured: bool
+    active_method: Literal["chatgpt", "api-key"] | None
+    account_email: str | None
+    account_plan: str | None
+    source: str
+    error: str | None
+    single_runtime_node: bool
+
+
+class CodexDeviceLogin(StrictModel):
+    login_id: str
+    status: Literal["PENDING", "SUCCEEDED", "FAILED", "CANCELLED"]
+    verification_url: str
+    user_code: str | None
+    error: str | None
+    created_at: str
+    completed_at: str | None
+
+
 class ProjectResponse(StrictModel):
     slug: str
     name: str
@@ -312,7 +338,11 @@ class RunUsage(StrictModel):
     input_tokens: int | None
     output_tokens: int | None
     cached_input_tokens: int | None
+    reasoning_output_tokens: int | None
+    total_tokens: int | None
     cost_microusd: int | None
+    usage_source: str | None
+    cost_source: str | None
 
 
 class RunError(StrictModel):
@@ -358,7 +388,11 @@ class RunAnalytics(StrictModel):
     p95_duration_ms: int | None
     input_tokens: int | None
     output_tokens: int | None
+    reasoning_output_tokens: int | None
+    total_tokens: int | None
     cost_microusd: int | None
+    usage_sources: list[str]
+    cost_sources: list[str]
     tool_calls: int
 
 

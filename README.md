@@ -24,26 +24,38 @@ workspaces, retries, leases, checkpoints, and restart recovery.
 ## Quick start
 
 You need Docker to run the server and [`uv`](https://docs.astral.sh/uv/) if you want the host CLI.
-Add the credential for each engine you intend to use:
+The local stack binds only to `127.0.0.1`, so the server really starts with one command:
 
 ```bash
 git clone https://github.com/theam/limina.git
 cd limina
-uv tool install .  # optional for API/MCP-only use
-
-cat > .env <<'ENV'
-LIMINA_API_TOKEN=replace-with-a-long-random-value
-OPENAI_API_KEY=...       # Codex projects
-ANTHROPIC_API_KEY=...    # Claude Code projects
-ENV
-
 docker compose up --build
 ```
 
-For local development, `LIMINA_API_TOKEN` is the only required control-plane setting. A project
-needs working credentials for its selected engine when execution starts. You may configure either
-provider or both. Team and internet deployments should use OIDC instead of the shared token; see
-[Team authentication](#team-authentication).
+Install the CLI in another terminal (`uv tool install .`) and authenticate the engines you use.
+Codex supports either your ChatGPT account or a server API key:
+
+```bash
+# Interactive device login; the credential remains in the limina-data volume.
+limina runtime codex login
+
+# Or put OPENAI_API_KEY in .env, restart, then materialize it explicitly.
+limina runtime codex login --method api-key
+
+# Claude Code uses its server credential from .env.
+# ANTHROPIC_API_KEY=...
+```
+
+`LIMINA_CODEX_AUTH_MODE=auto` (the default) preserves an existing ChatGPT login and otherwise uses
+`CODEX_ACCESS_TOKEN` or `OPENAI_API_KEY` when configured. Set it to `chatgpt`, `api-key`, or
+`access-token` to enforce one method. Limina creates `CODEX_HOME` on a fresh volume, persists the
+official Codex credential store there with private permissions, and removes raw provider
+credentials from project child environments.
+
+The no-token default is deliberately limited to the localhost-only Compose stack. If you set a
+local token, use two different values: `LIMINA_API_TOKEN` operates projects and
+`LIMINA_ADMIN_API_TOKEN` changes instance runtime configuration. Team and internet deployments
+should use OIDC; see [Security boundary](#security-boundary).
 
 The one container applies migrations and starts the API and supervisor. The `limina-data` Docker
 volume preserves the database, project workspaces, private engine continuation data, and the local
@@ -52,7 +64,6 @@ secret-encryption key.
 In another terminal:
 
 ```bash
-export LIMINA_API_TOKEN=replace-with-the-same-value
 export LIMINA_ACTOR=adrian
 
 limina doctor
@@ -138,11 +149,11 @@ needs without requiring it to understand provider sessions:
 - PostgreSQL full-text search with a portable SQLite fallback;
 - H → E → F nodes, revisions, explicit relations/backlinks, comments, tags, and saved views;
 - registered URLs, connectors, and bounded project-workspace uploads;
-- structured runtime runs with status, duration, model, tool activity, errors, and provider usage
-  or cost when the SDK supplies it;
+- structured runtime runs with per-turn input, cached, output, reasoning, and total tokens, plus
+  explicit provider or operator-rate cost provenance;
 - aggregate and daily time-series analytics for runs, knowledge throughput, and human-response
   latency;
-- one-time live tickets so browser WebSockets do not put long-lived bearer tokens in URLs.
+- one-time live tickets carried in the `limina.ticket.<ticket>` WebSocket subprotocol, never URLs.
 
 Semantic/vector retrieval is deliberately a later search backend. Full-text search and explicit
 relations provide deterministic relevance and graph semantics first, without inventing embedding
@@ -324,6 +335,7 @@ limina project archive retrieval-claude
 | `limina review` | Review hypotheses, experiments, findings, and evidence |
 | `limina export` | Produce a portable Markdown knowledge base |
 | `limina doctor` | Verify the instance and available runtime engines |
+| `limina runtime codex status/login/logout` | Administer the node-owned Codex login |
 
 Run `limina --help` or `limina <command> --help` for the full interface. Non-interactive commands
 support global JSON output:
@@ -358,7 +370,8 @@ threads, subagents, leases, versions, or checkpoints.
 
 ## Deployment
 
-The default single-instance topology uses SQLite and one persistent volume:
+The default single-instance topology uses SQLite, one persistent volume, localhost-only exposure,
+and unauthenticated `/livez` and `/readyz` probes:
 
 ```bash
 docker compose up --build
@@ -376,7 +389,12 @@ and ordered human guidance.
 
 ## Security boundary
 
-The shared token is a local-development mode. Team deployments use provider-neutral OIDC discovery,
+Local token mode has separate project and instance-administrator credentials. It also applies
+per-client authentication throttling plus a higher transport-wide emergency ceiling (configure
+the latter with `LIMINA_GLOBAL_AUTH_FAILURE_LIMIT`; it defaults to 1000 failures per window), so a
+single bad client cannot consume the shared ten-attempt client budget. The transport-wide ceiling
+also bounds failed authentication through WebSocket and MCP. Team deployments use
+provider-neutral OIDC discovery,
 JWKS signature verification, issuer/audience/expiry validation, server-derived identity, and
 project `OWNER`, `EDITOR`, and `VIEWER` roles. Configure it in `.env`:
 
@@ -411,12 +429,25 @@ gets a short-lived capability scoped to the active project. See the
 [architecture decision](docs/cloud-runtime-architecture.md) for the full trust and concurrency
 model.
 
+ChatGPT login is intentionally a single-runtime-node feature because Codex refreshes the shared
+credential store. Limina serializes ChatGPT-backed Codex turns and blocks login/logout while a
+turn is active. Use API-key mode for horizontally parallel Codex workloads. The Codex process must
+read its credential store to operate; environment scrubbing does not claim to hide that file from
+Codex itself.
+
+Transient provider failures create separate durable run attempts with retry ordinals and a
+persisted `wake_at`; default backoff is 30, 120, and 600 seconds. Override it with
+`LIMINA_RUNTIME_RETRY_DELAYS_SECONDS`. Optional cost estimates require all three operator rates:
+`LIMINA_CODEX_INPUT_USD_PER_MILLION_TOKENS`,
+`LIMINA_CODEX_CACHED_INPUT_USD_PER_MILLION_TOKENS`, and
+`LIMINA_CODEX_OUTPUT_USD_PER_MILLION_TOKENS`.
+
 ## Development
 
 Install both managed runtimes and run the acceptance suite:
 
 ```bash
-uv sync --extra runtimes
+uv sync --locked --all-extras --dev
 make runtime-check
 ```
 

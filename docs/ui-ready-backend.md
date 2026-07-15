@@ -117,7 +117,8 @@ correlated with the run ID. Completion records:
 - input, output, and cached tokens when exposed by the SDK;
 - cost in micro-US dollars when exposed by the SDK.
 
-Unavailable provider usage stays `null`; Limina does not estimate or fabricate it. Run detail and
+Unavailable provider usage stays `null`. Cost remains `null` unless the provider supplies it or
+the operator configures all token-price rates; estimated cost is labeled `operator_rate`. Run detail and
 event APIs are the product observability surface. Infrastructure traces and log export remain a
 deployment concern rather than a substitute for project-level telemetry.
 

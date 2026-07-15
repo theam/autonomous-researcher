@@ -14,7 +14,6 @@ from typing import Annotated, Any, TypeVar
 from uuid import uuid4
 
 import typer
-import uvicorn
 from alembic import command as alembic_command
 from alembic.config import Config as AlembicConfig
 from rich.console import Console
@@ -22,11 +21,12 @@ from rich.panel import Panel
 from rich.table import Table
 from websockets.sync.client import connect as websocket_connect
 
-from .api import create_app
 from .client import HttpRuntimeClient, LocalRuntimeClient, write_snapshot
 from .database import DEFAULT_DATABASE_PATH
 from .engines import RuntimeEngine, runtime_engine_label
 from .errors import InvariantError, LiminaError
+from .runtime_cli import register_runtime_commands
+from .server_cli import register_server_commands
 
 app = typer.Typer(
     name="limina",
@@ -39,6 +39,8 @@ app = typer.Typer(
 )
 project_app = typer.Typer(no_args_is_help=True, help="Create and manage Limina projects.")
 resource_app = typer.Typer(no_args_is_help=True, help="Manage resources Limina may consume.")
+runtime_app = typer.Typer(no_args_is_help=True, help="Administer managed runtime engines.")
+runtime_codex_app = typer.Typer(no_args_is_help=True, help="Administer Codex authentication.")
 database_app = typer.Typer(no_args_is_help=True)
 agent_app = typer.Typer(no_args_is_help=True)
 agent_hypothesis_app = typer.Typer(no_args_is_help=True)
@@ -46,6 +48,8 @@ agent_experiment_app = typer.Typer(no_args_is_help=True)
 agent_finding_app = typer.Typer(no_args_is_help=True)
 app.add_typer(project_app, name="project")
 app.add_typer(resource_app, name="resource")
+app.add_typer(runtime_app, name="runtime")
+runtime_app.add_typer(runtime_codex_app, name="codex")
 app.add_typer(database_app, name="db", hidden=True)
 app.add_typer(agent_app, name="_agent", hidden=True)
 agent_app.add_typer(agent_hypothesis_app, name="hypothesis")
@@ -60,10 +64,12 @@ class CliState:
     url: str
     database: str
     token: str | None
+    admin_token: str | None
     actor: str
     as_json: bool
     no_color: bool
     _public_client: HttpRuntimeClient | None = None
+    _admin_client: HttpRuntimeClient | None = None
     _agent_client: LocalRuntimeClient | HttpRuntimeClient | None = None
 
     @property
@@ -93,11 +99,18 @@ class CliState:
                 self._agent_client = LocalRuntimeClient(_database_url(self.database))
         return self._agent_client
 
+    def admin_client(self) -> HttpRuntimeClient:
+        if self._admin_client is None:
+            self._admin_client = HttpRuntimeClient(self.url, self.admin_token or self.token)
+        return self._admin_client
+
     def close(self) -> None:
         if self._public_client is not None:
             self._public_client.close()
         if self._agent_client is not None:
             self._agent_client.close()
+        if self._admin_client is not None:
+            self._admin_client.close()
 
 
 def _state(ctx: typer.Context) -> CliState:
@@ -160,6 +173,10 @@ def _emit(ctx: typer.Context, value: Any, render: Callable[[Console, Any], None]
         render(state.console, value)
 
 
+register_runtime_commands(runtime_codex_app, _state, _invoke, _emit, _command_id)
+register_server_commands(app, _state, _invoke, _emit)
+
+
 def _table(console: Console, title: str, columns: list[str], rows: list[list[str]]) -> None:
     table = Table(title=title, header_style="bold cyan")
     for column in columns:
@@ -195,6 +212,14 @@ def root(
         str | None,
         typer.Option("--token", envvar="LIMINA_API_TOKEN", help="Instance access token."),
     ] = None,
+    admin_token: Annotated[
+        str | None,
+        typer.Option(
+            "--admin-token",
+            envvar="LIMINA_ADMIN_API_TOKEN",
+            help="Instance-administrator token for runtime configuration.",
+        ),
+    ] = None,
     actor: Annotated[
         str,
         typer.Option("--actor", envvar="LIMINA_ACTOR", help="Your team identity."),
@@ -209,7 +234,7 @@ def root(
     ] = False,
 ) -> None:
     """Connect to one Limina instance; Limina owns all execution behind it."""
-    ctx.obj = CliState(url, database, token, actor, as_json, no_color)
+    ctx.obj = CliState(url, database, token, admin_token, actor, as_json, no_color)
     ctx.call_on_close(ctx.obj.close)
 
 
@@ -492,7 +517,9 @@ def attach(ctx: typer.Context, project: str) -> None:
     stop_reader = threading.Event()
     try:
         with websocket_connect(
-            f"{ws_url}/v1/projects/{project}/live", additional_headers=headers
+            f"{ws_url}/v1/projects/{project}/live",
+            additional_headers=headers,
+            subprotocols=["limina.v1"],
         ) as socket:
             state.console.print(
                 Panel(
@@ -698,53 +725,6 @@ def export_snapshot(
         lambda console, value: console.print(
             f"[green]Exported[/green] {value['file_count']} files to {value['target']}"
         ),
-    )
-
-
-@app.command()
-def doctor(ctx: typer.Context) -> None:
-    """Verify connectivity, authentication, and runtime ownership."""
-    state = _state(ctx)
-    result = _invoke(ctx, state.public_client().health)
-    _emit(
-        ctx,
-        result,
-        lambda console, value: console.print(
-            f"[green]ok[/green] {state.url} · runtime owned by {value['runtime_owner']} · "
-            f"engines {', '.join(runtime_engine_label(item) for item in value['runtimes'])}"
-        ),
-    )
-
-
-@app.command()
-def serve(
-    database_url: Annotated[
-        str, typer.Option("--database-url", envvar="LIMINA_DATABASE_URL")
-    ] = "sqlite:///.limina/server.db",
-    workspace_root: Annotated[
-        Path, typer.Option("--workspace-root", envvar="LIMINA_WORKSPACE_ROOT")
-    ] = Path(".limina/workspaces"),
-    host: Annotated[str, typer.Option("--host")] = "127.0.0.1",
-    port: Annotated[int, typer.Option("--port")] = 7433,
-    token: Annotated[str | None, typer.Option("--token", envvar="LIMINA_API_TOKEN")] = None,
-) -> None:
-    """Run a complete Limina instance, including all managed project runtimes."""
-    oidc_configured = bool(
-        os.environ.get("LIMINA_OIDC_ISSUER") and os.environ.get("LIMINA_OIDC_AUDIENCE")
-    )
-    if host not in {"127.0.0.1", "localhost", "::1"} and not token and not oidc_configured:
-        raise typer.BadParameter(
-            "a shared token or OIDC configuration is required for a non-local bind"
-        )
-    uvicorn.run(
-        create_app(
-            database_url=database_url,
-            token=token,
-            workspace_root=workspace_root,
-            internal_url=f"http://127.0.0.1:{port}",
-        ),
-        host=host,
-        port=port,
     )
 
 

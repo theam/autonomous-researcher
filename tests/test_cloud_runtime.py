@@ -108,11 +108,12 @@ class CloudRuntimeTests(unittest.TestCase):
                 {
                     "LIMINA_INTERNAL_URL": "http://runtime:7433",
                     "LIMINA_INTERNAL_TOKEN": "project-capability",
-                }
+                },
+                Path(self.temp_dir.name) / "codex",
             )
 
-        self.assertEqual(child["OPENAI_API_KEY"], "sdk-key")
-        self.assertEqual(child["CODEX_HOME"], "/var/lib/limina/codex")
+        self.assertEqual(child["OPENAI_API_KEY"], "")
+        self.assertEqual(child["CODEX_HOME"], str(Path(self.temp_dir.name) / "codex"))
         self.assertEqual(child["LIMINA_DATABASE_URL"], "")
         self.assertEqual(child["LIMINA_API_TOKEN"], "")
         self.assertEqual(child["LIMINA_SECRET_KEY"], "")
@@ -770,6 +771,10 @@ class CloudRuntimeTests(unittest.TestCase):
             "OPENAI_BASE_URL",
             "ANTHROPIC_BASE_URL",
             "CLAUDE_CONFIG_DIR",
+            "NODE_OPTIONS",
+            "BASH_ENV",
+            "GIT_SSH_COMMAND",
+            "PYTHONSTARTUP",
         ):
             with self.assertRaises(InvariantError):
                 self.service.set_variable(

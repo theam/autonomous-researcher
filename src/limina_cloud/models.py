@@ -436,7 +436,11 @@ class RuntimeRun(Base):
     input_tokens: Mapped[int | None] = mapped_column(BigInteger)
     output_tokens: Mapped[int | None] = mapped_column(BigInteger)
     cached_input_tokens: Mapped[int | None] = mapped_column(BigInteger)
+    reasoning_output_tokens: Mapped[int | None] = mapped_column(BigInteger)
+    total_tokens: Mapped[int | None] = mapped_column(BigInteger)
     cost_microusd: Mapped[int | None] = mapped_column(BigInteger)
+    usage_source: Mapped[str | None] = mapped_column(String(40))
+    cost_source: Mapped[str | None] = mapped_column(String(40))
     tool_calls: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     retry_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     started_at: Mapped[datetime] = mapped_column(

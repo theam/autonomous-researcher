@@ -5,6 +5,8 @@ services:
       dockerfile: Dockerfile.cloud
     environment:
       LIMINA_API_TOKEN: ${LIMINA_API_TOKEN:-}
+      LIMINA_ADMIN_API_TOKEN: ${LIMINA_ADMIN_API_TOKEN:-}
+      LIMINA_ALLOW_INSECURE_NO_AUTH: ${LIMINA_ALLOW_INSECURE_NO_AUTH:-1}
       LIMINA_OIDC_ISSUER: ${LIMINA_OIDC_ISSUER:-}
       LIMINA_OIDC_AUDIENCE: ${LIMINA_OIDC_AUDIENCE:-}
       LIMINA_OIDC_JWKS_URL: ${LIMINA_OIDC_JWKS_URL:-}
@@ -14,6 +16,8 @@ services:
       LIMINA_OIDC_LEEWAY_SECONDS: ${LIMINA_OIDC_LEEWAY_SECONDS:-30}
       LIMINA_CORS_ORIGINS: ${LIMINA_CORS_ORIGINS:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      CODEX_ACCESS_TOKEN: ${CODEX_ACCESS_TOKEN:-}
+      LIMINA_CODEX_AUTH_MODE: ${LIMINA_CODEX_AUTH_MODE:-auto}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       LIMINA_CODEX_MODEL: ${LIMINA_CODEX_MODEL:-gpt-5.4}
       LIMINA_CODEX_SANDBOX: ${LIMINA_CODEX_SANDBOX:-workspace-write}
@@ -22,10 +26,12 @@ services:
       LIMINA_MCP_ALLOWED_ORIGINS: ${LIMINA_MCP_ALLOWED_ORIGINS:-http://127.0.0.1:*,http://localhost:*,http://[::1]:*}
       LIMINA_UPLOAD_LIMIT_BYTES: ${LIMINA_UPLOAD_LIMIT_BYTES:-26214400}
     ports:
-      - "${LIMINA_PORT:-7433}:7433"
+      - "127.0.0.1:${LIMINA_PORT:-7433}:7433"
     volumes:
       - limina-data:/var/lib/limina
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:7433/readyz', timeout=2).read()"]
 
 volumes:
   limina-data:

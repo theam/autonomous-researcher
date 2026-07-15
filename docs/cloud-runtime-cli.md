@@ -10,18 +10,29 @@ subagent, claim a lease, or write a checkpoint.
 
 ## Start one server
 
-Configure an instance token and at least one engine credential in `.env`:
-
-```dotenv
-LIMINA_API_TOKEN=replace-with-a-long-random-value
-OPENAI_API_KEY=...       # when using Codex
-ANTHROPIC_API_KEY=...    # when using Claude Code
-```
-
-Then start the complete single-instance server:
+The localhost-only stack starts without configuration:
 
 ```bash
 docker compose up --build
+```
+
+Then authenticate Codex with a ChatGPT account, or configure engine credentials in `.env`:
+
+```dotenv
+OPENAI_API_KEY=...       # optional Codex API-key mode
+ANTHROPIC_API_KEY=...    # when using Claude Code
+```
+
+```bash
+limina runtime codex login                 # ChatGPT device flow
+limina runtime codex login --method api-key
+```
+
+When local access tokens are desired, keep project and runtime-administration authority separate:
+
+```dotenv
+LIMINA_API_TOKEN=replace-with-a-long-random-project-value
+LIMINA_ADMIN_API_TOKEN=replace-with-a-different-admin-value
 ```
 
 The `limina-data` volume preserves SQLite, project workspaces, both providers' private continuation
@@ -31,8 +42,9 @@ migrations before serving; there is no separate database or runtime command in t
 The direct development path is:
 
 ```bash
-uv sync --extra runtimes
+uv sync --locked --all-extras --dev
 export LIMINA_API_TOKEN=local-secret
+export LIMINA_ADMIN_API_TOKEN=another-local-secret
 uv run limina serve
 ```
 
@@ -42,8 +54,9 @@ For PostgreSQL:
 docker compose -f compose.cloud.yaml up --build
 ```
 
-All commands use `LIMINA_URL` (default `http://127.0.0.1:7433`), `LIMINA_API_TOKEN`, and the
-optional attribution identity `LIMINA_ACTOR`.
+Project commands use `LIMINA_URL` (default `http://127.0.0.1:7433`), `LIMINA_API_TOKEN`, and the
+optional attribution identity `LIMINA_ACTOR`. Runtime administration uses
+`LIMINA_ADMIN_API_TOKEN`.
 
 ## Choose a runtime
 

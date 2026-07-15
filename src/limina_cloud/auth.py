@@ -11,6 +11,13 @@ import httpx
 import jwt
 
 from .errors import AuthenticationError
+from .rate_limit import FailureRateLimiter
+
+
+def _tokens_equal(left: str, right: str) -> bool:
+    """Compare arbitrary Unicode credentials without letting malformed input raise."""
+
+    return compare_digest(left.encode("utf-8"), right.encode("utf-8"))
 
 
 @dataclass(frozen=True)
@@ -19,6 +26,7 @@ class Principal:
     display_name: str
     email: str | None = None
     instance_admin: bool = False
+    project_admin: bool = False
     auth_mode: str = "oidc"
 
     @property
@@ -26,12 +34,18 @@ class Principal:
         return self.display_name[:200]
 
     @classmethod
-    def local(cls, actor: str = "local-admin") -> Principal:
+    def local(
+        cls,
+        actor: str = "local-admin",
+        *,
+        instance_admin: bool = False,
+    ) -> Principal:
         name = actor.strip() or "local-admin"
         return cls(
             subject=f"local:{name}",
             display_name=name,
-            instance_admin=True,
+            instance_admin=instance_admin,
+            project_admin=True,
             auth_mode="local",
         )
 
@@ -44,20 +58,44 @@ class Authenticator(Protocol):
     ) -> Principal: ...
 
 
+class RateLimitedAuthenticator:
+    """Transport-neutral brute-force guard used by REST, WebSocket, and MCP."""
+
+    def __init__(self, wrapped: Authenticator, limiter: FailureRateLimiter) -> None:
+        self.wrapped = wrapped
+        self.limiter = limiter
+        self.mode = wrapped.mode
+
+    def authenticate(self, bearer_token: str | None, *, actor_hint: str | None = None) -> Principal:
+        self.limiter.check("all-transports")
+        try:
+            return self.wrapped.authenticate(bearer_token, actor_hint=actor_hint)
+        except AuthenticationError:
+            self.limiter.failure("all-transports")
+            raise
+
+
 class LocalAuthenticator:
     """Shared-token authentication for a trusted local development instance."""
 
     mode = "local"
 
-    def __init__(self, token: str | None) -> None:
+    def __init__(self, token: str | None, admin_token: str | None = None) -> None:
+        if token and admin_token and _tokens_equal(token, admin_token):
+            raise RuntimeError("LIMINA_API_TOKEN and LIMINA_ADMIN_API_TOKEN must be different.")
         self.token = token
+        self.admin_token = admin_token
 
     def authenticate(self, bearer_token: str | None, *, actor_hint: str | None = None) -> Principal:
-        if self.token is not None and (
-            bearer_token is None or not compare_digest(bearer_token, self.token)
-        ):
+        if self.admin_token and bearer_token and _tokens_equal(bearer_token, self.admin_token):
+            return Principal.local(actor_hint or "local-admin", instance_admin=True)
+        if self.token is not None:
+            if bearer_token is None or not _tokens_equal(bearer_token, self.token):
+                raise AuthenticationError()
+            return Principal.local(actor_hint or "local-user")
+        if self.admin_token is not None:
             raise AuthenticationError()
-        return Principal.local(actor_hint or "local-admin")
+        return Principal.local(actor_hint or "local-admin", instance_admin=True)
 
 
 class OidcAuthenticator:
@@ -150,7 +188,9 @@ class OidcAuthenticator:
         return str(value) == self.admin_value
 
 
-def authenticator_from_environment(*, local_token: str | None = None) -> Authenticator:
+def authenticator_from_environment(
+    *, local_token: str | None = None, local_admin_token: str | None = None
+) -> Authenticator:
     issuer = os.environ.get("LIMINA_OIDC_ISSUER", "").strip()
     audience = os.environ.get("LIMINA_OIDC_AUDIENCE", "").strip()
     if issuer or audience:
@@ -179,4 +219,9 @@ def authenticator_from_environment(*, local_token: str | None = None) -> Authent
             "Configure LIMINA_API_TOKEN for local development or LIMINA_OIDC_ISSUER and "
             "LIMINA_OIDC_AUDIENCE for team deployment."
         )
-    return LocalAuthenticator(local_token)
+    return LocalAuthenticator(
+        local_token,
+        local_admin_token
+        if local_admin_token is not None
+        else os.environ.get("LIMINA_ADMIN_API_TOKEN") or None,
+    )
