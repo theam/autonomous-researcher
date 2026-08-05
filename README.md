@@ -12,19 +12,39 @@
 
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![GitHub stars](https://img.shields.io/github/stars/theam/limina)](https://github.com/theam/limina/stargazers)
+[![GitHub forks](https://img.shields.io/github/forks/theam/limina)](https://github.com/theam/limina/network/members)
 
-Limina is a collaborative managed runtime for long-running, evidence-driven work. Humans use its
-CLI, services use its REST API, and collaborating agents use its MCP server. Each project runs on
-a Limina-managed **Codex** or **Claude Code** engine.
+Give Limina a problem with a measurable goal. It will autonomously research it — forming
+hypotheses, running experiments, challenging its own direction — until it finds a solution backed
+by evidence, or tells you what it learned trying.
 
-Your team operates projects: provide missions and resources, review accepted knowledge, and steer
-strategy. Limina operates everything below that boundary: model sessions, turns, subagents,
-workspaces, retries, leases, checkpoints, and restart recovery.
+Limina is useful anywhere progress can be evaluated: improving retrieval quality, investigating a
+production regression, comparing technical approaches, testing product changes, or researching a
+new capability. It keeps the complete evidence trail, so the result is not just an answer — it is a
+reviewable account of what was tried, what worked, what failed, and why.
 
-## Quick start
+## Choose how to use Limina
+
+Limina provides two ways to run the same evidence-first research loop:
+
+| | Managed runtime | Project template |
+|---|---|---|
+| Recommendation | **Recommended for most users** | Choose for the lightest local setup |
+| Execution | Limina owns long-running Codex or Claude Code execution, recovery, and retries | You run Codex or Claude Code directly in the generated project |
+| Collaboration | Shared projects through CLI, REST, WebSocket, and MCP | Markdown and Git collaboration |
+| Durable state | Canonical database plus portable Markdown export | `kb/` Markdown files are canonical |
+| Operations | One server manages projects, credentials, resources, steering, and observability | No server; your agent session reads and writes the project repository |
+| Choose it when | A team needs asynchronous work, shared steering, or execution that survives terminals | One person wants a portable research harness with almost no infrastructure |
+
+Start with the **managed runtime** unless you specifically want to operate the agent sessions
+yourself. Both paths enforce the same Hypothesis → Experiment → Finding evidence chain and produce
+a durable knowledge base.
+
+## Managed runtime quick start — recommended
 
 You need Docker to run the server and [`uv`](https://docs.astral.sh/uv/) if you want the host CLI.
-The local stack binds only to `127.0.0.1`, so the server really starts with one command:
+The local stack binds only to `127.0.0.1` and needs no extra configuration. Start the server with
+one command:
 
 ```bash
 git clone https://github.com/theam/limina.git
@@ -46,11 +66,9 @@ limina runtime codex login --method api-key
 # ANTHROPIC_API_KEY=...
 ```
 
-`LIMINA_CODEX_AUTH_MODE=auto` (the default) preserves an existing ChatGPT login and otherwise uses
-`CODEX_ACCESS_TOKEN` or `OPENAI_API_KEY` when configured. Set it to `chatgpt`, `api-key`, or
-`access-token` to enforce one method. Limina creates `CODEX_HOME` on a fresh volume, persists the
-official Codex credential store there with private permissions, and removes raw provider
-credentials from project child environments.
+By default, Limina reuses an existing ChatGPT login or falls back to your configured API key, and
+it keeps raw provider credentials out of project environments. See the
+[managed runtime guide](#managed-runtime-guide) for authentication and credential-storage details.
 
 The no-token default is deliberately limited to the localhost-only Compose stack. If you set a
 local token, use two different values: `LIMINA_API_TOKEN` operates projects and
@@ -71,6 +89,67 @@ limina doctor
 
 `LIMINA_URL` defaults to `http://127.0.0.1:7433`. `doctor` confirms connectivity and reports the
 available engines.
+
+From there, you give Limina the mission, success criteria, context, and resources. Limina owns the
+provider sessions and continues working when no user is attached. The sections below document the
+full managed-runtime workflow.
+
+## Project template quick start
+
+The template path keeps Limina inside a normal repository. There is no server or database: your
+agent uses `AGENTS.md` or `CLAUDE.md`, the repository hooks, and the file-backed `kb/` directly.
+
+Open [Claude Code](https://docs.anthropic.com/en/docs/claude-code) or
+[Codex](https://openai.com/index/introducing-codex/) and paste:
+
+```text
+Install the Limina research skill by running:
+curl -fsSL https://raw.githubusercontent.com/theam/limina/main/setup.sh | bash
+Then help me create a new Limina research project in the folder I choose.
+```
+
+The skill guides you through the project name, objective, context, measurable success criteria,
+resources, autonomy boundaries, and escalation rules. It creates an independent repository with
+the Limina template and validates its initial knowledge base.
+
+When setup is complete, open that project in Claude Code or Codex and start the autonomous run:
+
+```text
+/goal Continue Limina research until the mission success criteria are satisfied
+```
+
+In this path, closing the agent session stops active execution. The next session reconstructs the
+mission from `kb/mission/CHALLENGE.md`, `kb/ACTIVE.md`, and the linked evidence. Choose the managed
+runtime instead when execution should continue independently of a user's terminal.
+
+## The shared research loop
+
+Whichever path you choose, the user-facing workflow is the same:
+
+1. **Define a mission.** State the problem, measurable goal, baseline, resources, boundaries, and
+   when Limina should ask for help.
+2. **Let it investigate.** Limina searches existing approaches, forms falsifiable hypotheses, runs
+   controlled experiments, records findings, and challenges its current direction.
+3. **Review and steer.** You review the work and knowledge, provide missing resources, and change
+   the strategy when the evidence calls for it.
+4. **Get an evidence-backed result.** Limina either reaches the success criteria or explains what
+   it established, what failed, and what uncertainty remains.
+
+The durable research core is:
+
+```text
+Mission → Hypothesis → Experiment → Finding → Decision
+```
+
+`CHALLENGE.md` defines the mission. `ACTIVE.md` holds only the current objective, next step, and
+blocker. Small linked artifacts preserve literature, hypotheses, experiments, findings, challenge
+reviews, and strategic reviews without requiring the entire history in every model context.
+
+## Managed runtime guide
+
+The remainder of this README describes the recommended managed runtime. The
+[template files](templates/), [validator](scripts/kb_validate.py), and
+[project-creation skill](skill/SKILL.md) are the implementation of the lighter template path.
 
 ## Use the API or MCP
 
@@ -434,6 +513,12 @@ credential store. Limina serializes ChatGPT-backed Codex turns and blocks login/
 turn is active. Use API-key mode for horizontally parallel Codex workloads. The Codex process must
 read its credential store to operate; environment scrubbing does not claim to hide that file from
 Codex itself.
+
+`LIMINA_CODEX_AUTH_MODE=auto` (the default) preserves an existing ChatGPT login and otherwise uses
+`CODEX_ACCESS_TOKEN` or `OPENAI_API_KEY` when configured. Set it to `chatgpt`, `api-key`, or
+`access-token` to enforce one method. Limina creates `CODEX_HOME` on a fresh volume, persists the
+official Codex credential store there with private permissions, and removes raw provider
+credentials from project child environments.
 
 Transient provider failures create separate durable run attempts with retry ordinals and a
 persisted `wake_at`; default backoff is 30, 120, and 600 seconds. Override it with

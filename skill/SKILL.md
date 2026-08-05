@@ -5,7 +5,7 @@ description: "Set up and launch an autonomous research project with Limina. Use 
 
 # Limina
 
-Limina is a small research-first agent template for Claude Code and Codex. It keeps durable evidence in `kb/` without dragging a large operational ledger into every session. Codex projects also get a ready-to-send `/goal` command for long-running continuity.
+Limina is a small research-first agent template for Claude Code and Codex. It keeps durable evidence in `kb/` without dragging a large operational ledger into every session. Projects also get a ready-to-send `/goal` command for long-running continuity.
 
 ## Workflow
 
@@ -15,7 +15,7 @@ Before asking setup questions, explain:
 
 > **What you're setting up:** an autonomous research project with a persistent knowledge base, a narrow active-state file, and a required `H -> E -> F` evidence flow.
 >
-> The agent can work across long sessions, but the always-on context stays small: mission brief, active state, and only the relevant artifacts for the current step. Claude Code and Codex are both supported; Codex users also get a generated `/goal`.
+> The agent can work across long sessions, but the always-on context stays small: mission brief, active state, and only the relevant artifacts for the current step. Claude Code and Codex are both supported; both get a generated `/goal`.
 
 ### Step 2: Ask for a project name
 
@@ -29,10 +29,12 @@ Clone `https://github.com/theam/limina.git` into `./<project-name>/`, then remov
 
 Verify that `python3`, `git`, and either Claude Code or Codex are available.
 
-Install Python dependencies:
+The template's core scripts use the Python standard library and do not require a package install.
+If the user also wants to develop Limina itself or run the complete repository test suite and has
+`uv`, install the locked development environment:
 
 ```bash
-pip install -r requirements.txt
+uv sync --locked --dev
 ```
 
 ### Step 5: Define the mission
@@ -118,7 +120,7 @@ None.
 - Mission: [[CHALLENGE]]
 ```
 
-### Step 7: Generate the Codex Goal
+### Step 7: Generate the long-running Goal
 
 Run:
 
@@ -126,7 +128,8 @@ Run:
 python3 scripts/generate_goal.py --write
 ```
 
-If it fails, fix the missing `CHALLENGE.md` fields and run it again. The generated `kb/mission/GOAL.md` is optional for Claude Code and useful for Codex.
+If it fails, fix the missing `CHALLENGE.md` fields and run it again. The generated
+`kb/mission/GOAL.md` provides the ready-to-send `/goal` command for Claude Code and Codex.
 
 ### Step 8: Validate and commit
 
@@ -155,7 +158,8 @@ Tell the user:
 > cd <project-name> && claude
 > ```
 >
-> Or open the folder in Codex and send the `/goal` command from `kb/mission/GOAL.md`.
+> Then send the `/goal` command from `kb/mission/GOAL.md`. Or open the folder in Codex and send the
+> same command there.
 >
 > The runtime loads the mission brief and active state at startup. Hooks enforce `H -> E -> F`, validate kb writes, and run a final kb validation before stop.
 >

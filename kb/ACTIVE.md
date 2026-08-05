@@ -7,19 +7,19 @@ type: active-state
 
 ## Current Objective
 
-Prepare a bounded trusted internal PoC using the now-hardened managed Codex runtime while keeping
-production, Claude Code, and multi-replica claims behind their own evidence gates.
+Use the value-first, dual-path documentation to prepare the next internal PoC while keeping the
+managed runtime as the recommendation and the project template as the lightweight alternative.
 
 ## Next Step
 
-Select two or three real internal Codex missions and define cohort success/stop criteria. Create a
-separate experiment for live Claude Code or OIDC/PostgreSQL validation before claiming either.
+Use the recommended runtime path for the internal PoC and separately smoke-test the template
+onboarding flow before the next release.
 
 ## Blocker
 
-No implementation blocker. A cohort mission/data choice is required for the next research cycle.
-The reused OpenAI key should be rotated because it was supplied in chat, even though the bounded
-runtime test did not persist or disclose it in repository, event, container, or volume state.
+No documentation blocker. The reused OpenAI key should still be rotated because it was supplied in
+chat, even though the bounded runtime test did not persist or disclose it in repository, event,
+container, or volume state.
 
 ## Links
 
