@@ -14,268 +14,550 @@
 [![GitHub stars](https://img.shields.io/github/stars/theam/limina)](https://github.com/theam/limina/stargazers)
 [![GitHub forks](https://img.shields.io/github/forks/theam/limina)](https://github.com/theam/limina/network/members)
 
-Built by [The Agile Monkeys](https://theagilemonkeys.com).
+Give Limina a problem with a measurable goal. It will autonomously research it — forming
+hypotheses, running experiments, challenging its own direction — until it finds a solution backed
+by evidence, or tells you what it learned trying.
 
-Give Limina a problem with a measurable goal. It will autonomously research it — forming hypotheses, running experiments, challenging its own direction — until it finds a solution backed by evidence, or tells you what it learned trying.
+Limina is useful anywhere progress can be evaluated: improving retrieval quality, investigating a
+production regression, comparing technical approaches, testing product changes, or researching a
+new capability. It keeps the complete evidence trail, so the result is not just an answer — it is a
+reviewable account of what was tried, what worked, what failed, and why.
 
-## Quick start
+## Choose how to use Limina
 
-Open [Claude Code](https://docs.anthropic.com/en/docs/claude-code) or [Codex](https://openai.com/index/introducing-codex/) and paste:
+Limina provides two ways to run the same evidence-first research loop:
+
+| | Managed runtime | Project template |
+|---|---|---|
+| Recommendation | **Recommended for most users** | Choose for the lightest local setup |
+| Execution | Limina owns long-running Codex or Claude Code execution, recovery, and retries | You run Codex or Claude Code directly in the generated project |
+| Collaboration | Shared projects through CLI, REST, WebSocket, and MCP | Markdown and Git collaboration |
+| Durable state | Canonical database plus portable Markdown export | `kb/` Markdown files are canonical |
+| Operations | One server manages projects, credentials, resources, steering, and observability | No server; your agent session reads and writes the project repository |
+| Choose it when | A team needs asynchronous work, shared steering, or execution that survives terminals | One person wants a portable research harness with almost no infrastructure |
+
+Start with the **managed runtime** unless you specifically want to operate the agent sessions
+yourself. Both paths enforce the same Hypothesis → Experiment → Finding evidence chain and produce
+a durable knowledge base.
+
+## Managed runtime quick start — recommended
+
+You need Docker to run the server and [`uv`](https://docs.astral.sh/uv/) if you want the host CLI.
+The local stack binds only to `127.0.0.1` and needs no extra configuration. Start the server with
+one command:
+
+```bash
+git clone https://github.com/theam/limina.git
+cd limina
+docker compose up --build
+```
+
+Install the CLI in another terminal (`uv tool install .`) and authenticate the engines you use.
+Codex supports either your ChatGPT account or a server API key:
+
+```bash
+# Interactive device login; the credential remains in the limina-data volume.
+limina runtime codex login
+
+# Or put OPENAI_API_KEY in .env, restart, then materialize it explicitly.
+limina runtime codex login --method api-key
+
+# Claude Code uses its server credential from .env.
+# ANTHROPIC_API_KEY=...
+```
+
+By default, Limina reuses an existing ChatGPT login or falls back to your configured API key, and
+it keeps raw provider credentials out of project environments. See the
+[managed runtime guide](#managed-runtime-guide) for authentication and credential-storage details.
+
+The no-token default is deliberately limited to the localhost-only Compose stack. If you set a
+local token, use two different values: `LIMINA_API_TOKEN` operates projects and
+`LIMINA_ADMIN_API_TOKEN` changes instance runtime configuration. Team and internet deployments
+should use OIDC; see [Security boundary](#security-boundary).
+
+The one container applies migrations and starts the API and supervisor. The `limina-data` Docker
+volume preserves the database, project workspaces, private engine continuation data, and the local
+secret-encryption key.
+
+In another terminal:
+
+```bash
+export LIMINA_ACTOR=adrian
+
+limina doctor
+```
+
+`LIMINA_URL` defaults to `http://127.0.0.1:7433`. `doctor` confirms connectivity and reports the
+available engines.
+
+From there, you give Limina the mission, success criteria, context, and resources. Limina owns the
+provider sessions and continues working when no user is attached. The sections below document the
+full managed-runtime workflow.
+
+## Project template quick start
+
+The template path keeps Limina inside a normal repository. There is no server or database: your
+agent uses `AGENTS.md` or `CLAUDE.md`, the repository hooks, and the file-backed `kb/` directly.
+
+Open [Claude Code](https://docs.anthropic.com/en/docs/claude-code) or
+[Codex](https://openai.com/index/introducing-codex/) and paste:
 
 ```text
 Install the Limina research skill by running:
 curl -fsSL https://raw.githubusercontent.com/theam/limina/main/setup.sh | bash
-Then ask me to switch to the folder where I want my research project to live,
-and help me set up a new Limina research project.
+Then help me create a new Limina research project in the folder I choose.
 ```
 
-The agent will install the skill and guide you through the project name, research objective, context, and success criteria.
+The skill guides you through the project name, objective, context, measurable success criteria,
+resources, autonomy boundaries, and escalation rules. It creates an independent repository with
+the Limina template and validates its initial knowledge base.
 
-When setup is done, open the new project in Claude Code or Codex and start the autonomous run:
+When setup is complete, open that project in Claude Code or Codex and start the autonomous run:
 
 ```text
 /goal Continue Limina research until the mission success criteria are satisfied
 ```
 
-## What is this
+In this path, closing the agent session stops active execution. The next session reconstructs the
+mission from `kb/mission/CHALLENGE.md`, `kb/ACTIVE.md`, and the linked evidence. Choose the managed
+runtime instead when execution should continue independently of a user's terminal.
 
-Limina is an autonomous research harness for AI agents. You describe a problem with clear success criteria, and the agent works through it: break it down, survey existing approaches, form hypotheses, design and run experiments, challenge its own assumptions, and iterate — until it reaches a solution or exhausts the approaches and tells you what it learned.
+## The shared research loop
 
-It works on anything with a measurable outcome. Our team uses it for:
+Whichever path you choose, the user-facing workflow is the same:
 
-- Optimizing a search engine for a large e-commerce platform
-- A/B testing product features
-- Researching state-of-the-art approaches for audio transcription
-- Optimizing social media reach with data-driven experiments
-- Investigating root causes of production performance issues
+1. **Define a mission.** State the problem, measurable goal, baseline, resources, boundaries, and
+   when Limina should ask for help.
+2. **Let it investigate.** Limina searches existing approaches, forms falsifiable hypotheses, runs
+   controlled experiments, records findings, and challenges its current direction.
+3. **Review and steer.** You review the work and knowledge, provide missing resources, and change
+   the strategy when the evidence calls for it.
+4. **Get an evidence-backed result.** Limina either reaches the success criteria or explains what
+   it established, what failed, and what uncertainty remains.
 
-Everything the agent does is written to a persistent knowledge base (`kb/`). Hypotheses link to experiments. Experiments link to findings. Decisions are logged with reasoning. If the agent gets stuck, it escalates to you instead of guessing. You don't just get a result — you get the full trail of how it got there and why.
-
-This repository is a **template/starter system** — clone it, start an agent, and describe your problem.
-
-## Who is this for
-
-- **Technical leads** — You need to make a decision between approaches and don't have weeks to run the comparison yourself. Limina does the legwork and gives you the evidence to decide.
-- **Product teams** — You want to optimize a metric — conversion rate, latency, cost, user engagement — and need systematic experimentation, not guesswork.
-- **Research engineers** — You're tired of manually setting up experiment after experiment, tracking what you tried, and remembering why you discarded something three days ago. The agent keeps the full trail for you.
-- **Scientists** — Your research involves systematic evaluation across many variables. Limina runs the loop — hypothesize, test, record, review, iterate — so you can focus on the questions, not the bookkeeping.
-- **Business intelligence** — You have a question that requires more than pulling a dashboard. Something that needs real investigation: gathering data from multiple sources, testing assumptions, building evidence for a recommendation.
-- **Anyone with a goal that can be measured** — If you can define what "better" looks like, Limina can research how to get there.
-
-## What you can do with it
-
-**Define a mission.** Describe your research objective — what you're trying to figure out, what "better" means, what resources the agent can use, and when it should come to you for a decision.
-
-**Let it run.** The agent frames the problem, forms hypotheses, runs experiments, reviews its direction, and iterates toward your success criteria. It works across hours or days and picks up where it left off after interruptions.
-
-**Steer when needed.** When the agent hits something it can't decide on its own — needs more budget, wants to try a risky approach, reached a fork — it stops and asks you.
-
-**Get the result.** When the agent meets your success criteria — or determines it can't — you have the solution, the full research trail, and the reasoning behind every decision it made along the way.
-
-## What to expect
-
-As the agent works, it builds a knowledge base in `kb/`:
-
-```
-kb/
-├── ACTIVE.md              ← current objective, next step, blocker
-├── mission/
-│   └── CHALLENGE.md        ← your research brief
-├── lessons/
-│   └── README.md           ← reusable lessons
-├── research/
-│   ├── hypotheses/H001.md  ← what it thinks might work
-│   ├── experiments/E001.md ← how it tested each hypothesis
-│   ├── findings/F001.md    ← what it learned
-│   └── literature/L001.md  ← relevant external work
-├── reports/
-│   ├── CR001.md            ← challenge review
-│   └── SR001.md            ← strategic review
-└── DASHBOARD.md            ← Obsidian-friendly overview
-```
-
-Check progress anytime by reading the files in `kb/` or asking the agent for a status update. When it gets stuck or needs a decision, it will ask you.
-
-## Writing a good mission
-
-The agent will ask you about your problem interactively. You'll get better results if your description reads like a **research brief** — here's what to include:
-
-1. **Research objective** — what problem you're trying to solve or improve
-2. **Evaluation target** — what "better" means and what failure is unacceptable
-3. **Baseline** — the current system, method, or repo to beat or replace
-4. **Resource envelope** — what compute, budget, datasets, APIs, and services are available
-5. **Autonomy boundaries** — what the agent is allowed to generate on its own (evaluation sets, synthetic data, benchmarks)
-6. **Escalation rules** — when it should ask you for more budget, tools, or approvals
-
-### Examples
-
-**Research & optimization:**
+The durable research core is:
 
 ```text
-Your objective is to improve a multilingual retrieval system for a product catalog.
-
-The system should support both natural-language intent queries and traditional keyword search.
-Success requires high precision, high recall, and strong latency. Missing relevant items or
-returning irrelevant ones is not acceptable.
-
-You have an existing baseline system to improve.
-You may use the datasets, services, and API keys available in the project environment.
-You also have a bounded compute budget and should optimize for effective iteration, not long
-expensive runs by default.
-
-If evaluation data does not exist, generate it yourself and document how it was created.
-If additional tools, budget, or access are needed, ask with a clear justification.
+Mission → Hypothesis → Experiment → Finding → Decision
 ```
 
-**Investigation & root cause analysis:**
+`CHALLENGE.md` defines the mission. `ACTIVE.md` holds only the current objective, next step, and
+blocker. Small linked artifacts preserve literature, hypotheses, experiments, findings, challenge
+reviews, and strategic reviews without requiring the entire history in every model context.
+
+## Managed runtime guide
+
+The remainder of this README describes the recommended managed runtime. The
+[template files](templates/), [validator](scripts/kb_validate.py), and
+[project-creation skill](skill/SKILL.md) are the implementation of the lighter template path.
+
+## Use the API or MCP
+
+The same server also exposes a versioned REST API and a Streamable HTTP MCP server. These are not
+separate runtimes: CLI, REST, WebSocket, and MCP all call the same project operations and observe
+the same database, event sequence, managed execution loop, and knowledge graph.
+
+Use REST for services and automation. The typed OpenAPI document is available at `/openapi.json`,
+with an interactive explorer at `/docs`. Every project request uses a bearer token. In local mode,
+`X-Limina-Actor` supplies attribution; in OIDC mode Limina derives identity from signed claims and
+ignores that header. Mutations carry an idempotency key for safe retries:
+
+```bash
+curl -X POST http://127.0.0.1:7433/v1/projects \
+  -H "Authorization: Bearer $LIMINA_API_TOKEN" \
+  -H "X-Limina-Actor: $LIMINA_ACTOR" \
+  -H "Idempotency-Key: $(uuidgen)" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "slug": "retrieval-codex",
+    "name": "Multilingual retrieval",
+    "objective": "Improve multilingual product retrieval",
+    "success_criteria": "Increase held-out NDCG by 10% without a P95 latency regression",
+    "context": "The current baseline combines BM25 with embeddings",
+    "runtime": "codex"
+  }'
+
+curl http://127.0.0.1:7433/v1/projects/retrieval-codex/review \
+  -H "Authorization: Bearer $LIMINA_API_TOKEN"
+```
+
+Use MCP when another agent should review or operate Limina at the same human-facing boundary. For
+Codex, add this to `~/.codex/config.toml` (or the trusted project's `.codex/config.toml`):
+
+```toml
+[mcp_servers.limina]
+url = "http://127.0.0.1:7433/mcp/"
+bearer_token_env_var = "LIMINA_API_TOKEN"
+
+[mcp_servers.limina.env_http_headers]
+"X-Limina-Actor" = "LIMINA_ACTOR"
+```
+
+For Claude Code, register the same endpoint without storing the token in the file:
+
+```bash
+claude mcp add-json --scope user limina \
+  '{"type":"http","url":"http://127.0.0.1:7433/mcp/","headers":{"Authorization":"Bearer ${LIMINA_API_TOKEN}","X-Limina-Actor":"${LIMINA_ACTOR}"}}'
+```
+
+The MCP surface provides tools to create and manage projects, preflight kickoff, steer strategy,
+query the knowledge graph, inspect runs and analytics, read ordered activity, and manage visible
+variables and sources. It also provides read-only
+`limina://projects/...` resources for status, reviews, individual H/E/F artifacts, and Markdown
+snapshots. It deliberately does not accept secret values in model-visible tool arguments; set or
+rotate secrets with `limina resource secret` or the authenticated REST endpoint.
+
+For a remote hostname, add it to the server's DNS-rebinding allowlist before starting Compose:
+
+```bash
+LIMINA_MCP_ALLOWED_HOSTS=limina.example.com docker compose up --build
+```
+
+If a browser-based MCP client sends an `Origin` header, also set
+`LIMINA_MCP_ALLOWED_ORIGINS=https://your-client.example.com`. TLS remains required outside a
+trusted local network.
+
+### UI-ready project surfaces
+
+REST and MCP share one authorization and operation layer. The backend exposes the primitives a UI
+needs without requiring it to understand provider sessions:
+
+- editable project kickoff drafts, built-in templates, preflight checks, memberships, and roles;
+- durable guidance bodies with actor, delivery, pending/acknowledged state, and timestamps;
+- paginated project, review, event, run, and knowledge queries;
+- PostgreSQL full-text search with a portable SQLite fallback;
+- H → E → F nodes, revisions, explicit relations/backlinks, comments, tags, and saved views;
+- registered URLs, connectors, and bounded project-workspace uploads;
+- structured runtime runs with per-turn input, cached, output, reasoning, and total tokens, plus
+  explicit provider or operator-rate cost provenance;
+- aggregate and daily time-series analytics for runs, knowledge throughput, and human-response
+  latency;
+- one-time live tickets carried in the `limina.ticket.<ticket>` WebSocket subprotocol, never URLs.
+
+Semantic/vector retrieval is deliberately a later search backend. Full-text search and explicit
+relations provide deterministic relevance and graph semantics first, without inventing embedding
+infrastructure before there is evidence it improves project review.
+
+## Create a project
+
+Choose the engine once, when the project is created:
+
+```bash
+# Codex is the default
+limina project create retrieval-codex \
+  --runtime codex \
+  --name "Multilingual retrieval — Codex" \
+  --mission "Improve multilingual product retrieval" \
+  --success "Increase held-out NDCG by 10% without a P95 latency regression" \
+  --context "The current baseline combines BM25 with embeddings"
+
+# Or run the same kind of mission with Claude Code
+limina project create retrieval-claude \
+  --runtime claude-code \
+  --name "Multilingual retrieval — Claude" \
+  --mission "Improve multilingual product retrieval" \
+  --success "Increase held-out NDCG by 10% without a P95 latency regression" \
+  --context "The current baseline combines BM25 with embeddings"
+```
+
+The runtime and kickoff brief may be edited while the project is still `CREATED`. They become
+immutable at the first start, which keeps the workspace, continuation history, audit trail, and
+behavior coherent. Create another project when you want an independent run or an engine
+comparison. Creating records the brief; execution starts only when you say so.
+
+## Provide resources
+
+Resources belong to a project, not to a provider. The selected runtime receives them only during
+that project's managed turns.
+
+Variables are visible configuration and references:
+
+```bash
+limina resource variable retrieval-claude SOURCE_REPO_URL https://github.com/acme/search
+limina resource variable retrieval-claude EVAL_SET_URI s3://research/eval-v3.parquet
+```
+
+Secrets are encrypted and write-only. Read them from an environment variable, standard input, or
+a hidden prompt—never put the value directly in shell history:
+
+```bash
+limina resource secret retrieval-claude GITHUB_TOKEN --from-env GITHUB_TOKEN
+printf '%s' "$AWS_SESSION_TOKEN" | \
+  limina resource secret retrieval-claude AWS_SESSION_TOKEN --from-stdin
+limina resource secret retrieval-claude SERVICE_API_KEY
+
+limina resource list retrieval-claude
+```
+
+Secret values are not returned by the public API. Limina redacts exact values from runtime events,
+decisions, and adapter failures, and prevents project resources from overriding control-plane or
+provider credential names. Setting, rotating, or revoking a resource during active work causes a
+controlled turn restart, so the child process receives a fresh environment and revoked values do
+not linger in the old process.
+
+## Start it and leave
+
+```bash
+limina start retrieval-claude
+limina status retrieval-claude
+```
+
+Limina now owns the execution loop. Closing the terminal does not stop the project. A server
+restart reconstructs active project loops and resumes each provider's private continuation.
+
+## Collaborate
+
+Every teammate connects to the same instance. A local shared-token instance accepts an attribution
+name; an OIDC instance derives the teammate identity and project role from authenticated state:
+
+```bash
+export LIMINA_URL=https://limina.example.com
+export LIMINA_API_TOKEN=...
+export LIMINA_ACTOR=maya
+```
+
+Follow durable activity:
+
+```bash
+limina watch retrieval-claude
+```
+
+`Ctrl-C` stops watching, not the project. Events can be replayed after a disconnect.
+
+Steer asynchronously:
+
+```bash
+limina steer retrieval-claude \
+  "Compare against the strongest cross-encoder baseline before drawing a conclusion."
+
+limina steer retrieval-claude \
+  'Approved to spend up to $100 on the larger evaluation.' \
+  --kind APPROVAL
+```
+
+Guidance is committed before delivery. With Codex, Limina steers the active turn directly. With
+Claude Code, Limina interrupts the active response and immediately continues the same managed
+session with the new direction. If no turn is active, either engine receives the queued guidance
+on its next turn.
+
+Enter the live project when synchronous steering matters:
+
+```bash
+limina attach retrieval-claude
+```
 
 ```text
-Our API's P99 latency jumped from 120ms to 800ms after the last deploy.
-We need to find the root cause and a fix.
-
-The service is a Node.js app on ECS with a PostgreSQL database.
-You have access to the repo, CloudWatch logs, and APM traces.
-Success means P99 back under 200ms with the fix verified in staging.
-
-If you need access to production or want to run load tests, ask first.
+limina> Prioritize generalization over a benchmark-specific improvement.
+limina> /pause
+limina> /resume
+limina> /interrupt
+limina> /detach
 ```
 
-**Product optimization:**
+Plain text steers the managed runtime. `/detach` only leaves the live view. Multiple teammates may
+attach at once; everyone sees the same attributed, durable event sequence.
+
+## Review knowledge
+
+```bash
+limina review retrieval-claude
+limina review retrieval-claude --artifact H001
+limina review retrieval-claude --artifact E003
+limina review retrieval-claude --artifact F002
+```
+
+Limina enforces the evidence chain:
 
 ```text
-We need to improve the conversion rate of our landing page.
-Current conversion is 2.3% and we want to reach 4%.
-
-Run A/B tests on copy, layout, and CTA variations. You can generate
-test variants and analyze results from our analytics API.
-Track what you tested, what worked, and why.
-
-If you need to deploy a variant to production, ask first.
+Hypothesis → Experiment → Finding
 ```
 
-## How it works
+Experiments require hypotheses, and findings require completed experiments. Observations are
+append-only; IDs are allocated atomically; independent experiments can write concurrently; and
+stale decisions are rejected instead of overwriting newer knowledge.
 
+Export a deterministic Markdown projection for offline review, Obsidian, archival, or Git:
+
+```bash
+limina export retrieval-claude ./retrieval-kb
 ```
-You describe the problem
-  → Agent decomposes into tasks
-  → Hypothesis → Experiment → Finding
-  → Reviews direction, challenges assumptions
-  → Iterates from persistent state across sessions
+
+The database is canonical while a project runs. Markdown and Git are review and portability
+surfaces, not the live coordination mechanism.
+
+## Lifecycle and commands
+
+```bash
+limina project list
+limina project show retrieval-claude
+
+limina pause retrieval-claude
+limina resume retrieval-claude
+limina stop retrieval-claude
+limina project archive retrieval-claude
 ```
 
-1. You describe the research objective, constraints, and available resources.
-2. The agent decomposes the work into tasks, questions, and hypotheses.
-3. The agent runs experiments, gathers evidence, and records findings.
-4. The agent reviews the direction, challenges assumptions, and updates the plan.
-5. The agent continues from persistent state across sessions instead of starting over.
+- `pause` interrupts active work and preserves resumability.
+- `resume` continues a paused, waiting, stopped, or failed project.
+- `stop` ends execution without deleting history or knowledge.
+- `archive` hides an inactive project from the default list without deleting it.
 
----
+| Command | Purpose |
+|---|---|
+| `limina project create/list/show/archive` | Manage durable projects and select their runtime |
+| `limina start/pause/resume/stop` | Control project lifecycle |
+| `limina status` | See objective, next step, blocker, and progress |
+| `limina resource variable/secret/list/remove` | Manage project-scoped access |
+| `limina watch` | Follow durable activity |
+| `limina steer` | Send durable feedback, answers, approvals, or blockers |
+| `limina attach` | Watch and steer an active project interactively |
+| `limina review` | Review hypotheses, experiments, findings, and evidence |
+| `limina export` | Produce a portable Markdown knowledge base |
+| `limina doctor` | Verify the instance and available runtime engines |
+| `limina runtime codex status/login/logout` | Administer the node-owned Codex login |
 
-## Compatibility
+Run `limina --help` or `limina <command> --help` for the full interface. Non-interactive commands
+support global JSON output:
 
-Limina works with Claude Code, Codex, and OpenCode. Claude Code loads `CLAUDE.md` automatically; Codex and OpenCode load `AGENTS.md`. Both files are functionally equivalent — they guide the agent through the same methodology using runtime-specific tools.
+```bash
+limina --json project show retrieval-claude | jq '.runtime'
+limina --json review retrieval-claude | jq '.findings[] | {id, title}'
+```
 
-| Capability | Claude Code | Codex | OpenCode |
-|---|---|---|---|
-| Ask the user for missing information | `AskUserQuestion` | `request_user_input` or a direct question | Direct question |
-| Delegate work | Slash commands and Claude agents | `spawn_agent` / `send_input` | — |
-| Communicate status | Active session/chat | Active session/chat | Active session/chat |
-| Validate KB state | `python3 scripts/kb_validate.py` | `python3 scripts/kb_validate.py` | `python3 scripts/kb_validate.py` |
+## Runtime ownership
 
-## What you get
+```mermaid
+flowchart LR
+    Team["Team"] --> Interfaces["CLI, REST, WebSocket, or MCP"]
+    Interfaces --> API["Shared project operations"]
+    API --> Supervisor["Limina project supervisor"]
+    Supervisor --> Adapter{"Project runtime"}
+    Adapter --> Codex["Codex SDK"]
+    Adapter --> Claude["Claude Agent SDK"]
+    Supervisor --> Workspace["Durable project workspace"]
+    Supervisor --> DB[("Canonical project state")]
+    Codex --> Knowledge["Private H → E → F protocol"]
+    Claude --> Knowledge
+    Knowledge --> DB
+    DB --> Interfaces
+```
 
-- A persistent knowledge base in `kb/` with Obsidian-compatible YAML frontmatter
-- A research-first workflow:
-  - research: Hypothesis → Experiment → Finding
-- **Runtime enforcement hooks** — the H→E→F chain and KB validation are enforced mechanically, not just by instructions
-- First-class review artifacts: Challenge Reviews and Strategic Reviews
-- Installable companion skills for literature research, experiment rigor, adversarial review, and maintainable software work
-- Adapters for Claude Code, Codex, and OpenCode
-- Core artifact templates in `templates/`
-- Native `/goal` execution for long-running Claude Code and Codex sessions
-- A KB validator: `python3 scripts/kb_validate.py`
-- Provenance and staleness tracking: `python3 scripts/kb_provenance.py`
-- Optional Obsidian vault integration: `bash scripts/obsidian_init.sh`
+Each active project has one Limina-owned supervisory loop and exactly one engine. The loop creates
+or resumes the private continuation, injects project resources, streams selected activity,
+checkpoints progress, and recovers after process restarts. Users never operate workers, sessions,
+threads, subagents, leases, versions, or checkpoints.
 
-## Core model
+## Deployment
 
-The system is built around a persistent knowledge base in `kb/`.
+The default single-instance topology uses SQLite, one persistent volume, localhost-only exposure,
+and unauthenticated `/livez` and `/readyz` probes:
 
-- Durable state lives in `kb/`, not only in conversation context
-- The only required core workflow is Hypothesis → Experiment → Finding
-- `ACTIVE.md` and `CHALLENGE.md` hold the always-on state
-- Reviews are first-class artifacts: Challenge Reviews and Strategic Reviews
-- Skills are part of the default process for major phases like literature search, experiment design, adversarial review, and implementation
+```bash
+docker compose up --build
+```
 
-### Core tracked artifacts
+Use PostgreSQL when you need managed database operations or plan for multiple runtime replicas:
 
-These are the file-backed artifact types enforced by the validator:
+```bash
+docker compose -f compose.cloud.yaml up --build
+```
 
-| Prefix | Meaning | Location |
-|---|---|---|
-| `H` | Hypothesis | `kb/research/hypotheses/` |
-| `E` | Experiment | `kb/research/experiments/` |
-| `F` | Finding | `kb/research/findings/` |
-| `L` | Literature review | `kb/research/literature/` |
-| `CR` | Challenge review | `kb/reports/` |
-| `SR` | Strategic review | `kb/reports/` |
+The same runtime image contains both engine adapters. PostgreSQL coordinates project ownership,
+atomic artifact IDs, scoped experiment writes, compare-and-swap decisions, idempotent mutations,
+and ordered human guidance.
 
-Required non-ID files:
+## Security boundary
 
-- `kb/ACTIVE.md`
-- `kb/mission/CHALLENGE.md`
+Local token mode has separate project and instance-administrator credentials. It also applies
+per-client authentication throttling plus a higher transport-wide emergency ceiling (configure
+the latter with `LIMINA_GLOBAL_AUTH_FAILURE_LIMIT`; it defaults to 1000 failures per window), so a
+single bad client cannot consume the shared ten-attempt client budget. The transport-wide ceiling
+also bounds failed authentication through WebSocket and MCP. Team deployments use
+provider-neutral OIDC discovery,
+JWKS signature verification, issuer/audience/expiry validation, server-derived identity, and
+project `OWNER`, `EDITOR`, and `VIEWER` roles. Configure it in `.env`:
 
-The validator checks:
+```dotenv
+LIMINA_OIDC_ISSUER=https://identity.example.com
+LIMINA_OIDC_AUDIENCE=limina-api
+# Optional when discovery does not advertise the desired endpoint:
+# LIMINA_OIDC_JWKS_URL=https://identity.example.com/.well-known/jwks.json
+# Optional instance administrator mapping:
+# LIMINA_OIDC_ADMIN_CLAIM=roles
+# LIMINA_OIDC_ADMIN_VALUE=limina-admin
+# Optional 0-300 second clock-skew tolerance (default 30):
+# LIMINA_OIDC_LEEWAY_SECONDS=30
+LIMINA_CORS_ORIGINS=https://limina-ui.example.com
+```
 
-- research traceability: experiments link to hypotheses, findings link to experiments
-- wikilink and parent-child consistency in the research graph
-- challenge review and strategic review metadata and naming
-- malformed filenames, duplicate IDs, and ID gaps
+Then run the same command: `docker compose up --build`. Do not set `LIMINA_API_TOKEN` in OIDC
+mode. Limina refuses a non-local bind unless one of these authentication modes is configured.
 
-The validator supports both YAML frontmatter and blockquote metadata formats. Additional modes:
+Terminate the API behind TLS. For an untrusted multi-tenant service, also load
+`LIMINA_SECRET_KEY` from a secrets manager, isolate project workspaces with containers or
+microVMs, and add quotas, external object storage, and audit export. Native run telemetry and
+analytics diagnose Limina work; infrastructure logs/traces should still be exported by the
+deployment platform.
 
-- `--check-file <path>` — validate a single file in isolation (fast, used by hooks)
-- `--quiet` — suppress output when validation passes
-- `--format json` — output results as JSON
+Registered `URL` sources must use HTTP or HTTPS. URL and connector URIs cannot embed credentials
+in user-info or credential-like query parameters; keep those values in write-only encrypted
+project secrets.
 
-### Runtime enforcement
+The managed model process does not receive the database URL or Limina administrative token. It
+gets a short-lived capability scoped to the active project. See the
+[architecture decision](docs/cloud-runtime-architecture.md) for the full trust and concurrency
+model.
 
-In Claude Code, hooks in `.claude/settings.json` enforce rules automatically at runtime:
+ChatGPT login is intentionally a single-runtime-node feature because Codex refreshes the shared
+credential store. Limina serializes ChatGPT-backed Codex turns and blocks login/logout while a
+turn is active. Use API-key mode for horizontally parallel Codex workloads. The Codex process must
+read its credential store to operate; environment scrubbing does not claim to hide that file from
+Codex itself.
 
-| Hook | Type | What it does |
-|---|---|---|
-| `session_start.sh` | SessionStart | Injects the current challenge and active state into agent context |
-| `enforce_hef_chain.sh` | PreToolUse | **Blocks** experiment creation without a hypothesis, and finding creation without an experiment |
-| `kb_write_guard.sh` | PostToolUse | Validates every `kb/` write against the artifact schema in real-time |
-| `stop_validate.sh` | Stop | Re-validates the KB before the session closes after KB-heavy work |
+`LIMINA_CODEX_AUTH_MODE=auto` (the default) preserves an existing ChatGPT login and otherwise uses
+`CODEX_ACCESS_TOKEN` or `OPENAI_API_KEY` when configured. Set it to `chatgpt`, `api-key`, or
+`access-token` to enforce one method. Limina creates `CODEX_HOME` on a fresh volume, persists the
+official Codex credential store there with private permissions, and removes raw provider
+credentials from project child environments.
 
-The hooks are deterministic shell scripts — the agent cannot choose to skip them. Blocking hooks (exit code 2) prevent the action entirely; non-blocking hooks (exit code 0) inject guidance into the agent's context.
+Transient provider failures create separate durable run attempts with retry ordinals and a
+persisted `wake_at`; default backoff is 30, 120, and 600 seconds. Override it with
+`LIMINA_RUNTIME_RETRY_DELAYS_SECONDS`. Optional cost estimates require all three operator rates:
+`LIMINA_CODEX_INPUT_USD_PER_MILLION_TOKENS`,
+`LIMINA_CODEX_CACHED_INPUT_USD_PER_MILLION_TOKENS`, and
+`LIMINA_CODEX_OUTPUT_USD_PER_MILLION_TOKENS`.
 
-### Provenance and staleness
+## Development
 
-`python3 scripts/kb_provenance.py --stale-check` detects:
+Install both managed runtimes and run the acceptance suite:
 
-- Findings referencing superseded hypotheses
-- Decisions citing rejected hypotheses
-- Contradictions between findings on the same hypothesis
-- Literature entries older than a configurable threshold
+```bash
+uv sync --locked --all-extras --dev
+make runtime-check
+```
 
-### Obsidian integration
+Run locally with either or both provider credentials:
 
-`bash scripts/obsidian_init.sh` sets up an optional Obsidian vault over `kb/`:
+```bash
+export LIMINA_API_TOKEN=local-secret
+export OPENAI_API_KEY=...       # optional: Codex projects
+export ANTHROPIC_API_KEY=...    # optional: Claude Code projects
+uv run limina serve
+```
 
-- Creates `.obsidian/` config with Dataview plugin settings
-- Generates a `DASHBOARD.md` with live queries for the active state, experiments, findings, and literature
-- Configures graph view color groups for the research core
+Further reading:
 
-The `kb/` remains a Git-backed Markdown source of truth. Obsidian is the human UI layer.
+- [CLI user story](docs/cloud-runtime-cli.md)
+- [Architecture and concurrency model](docs/cloud-runtime-architecture.md)
+- [UI-ready backend and API map](docs/ui-ready-backend.md)
+- [Verification evidence](docs/cloud-runtime-evidence.md)
 
 ## Contributing
 
-Found a bug? Have an idea? We'd love your input.
+- [Open an issue](https://github.com/theam/limina/issues) for bugs and feature requests.
+- [Start a discussion](https://github.com/theam/limina/discussions) for design questions.
 
-- [Open an issue](https://github.com/theam/limina/issues) to report problems or suggest features
-- [Start a discussion](https://github.com/theam/limina/discussions) to ask questions or share how you're using Limina
+Built by [The Agile Monkeys](https://theagilemonkeys.com).
 
 ## License
 

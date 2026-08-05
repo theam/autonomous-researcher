@@ -1,0 +1,70 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: limina
+      POSTGRES_USER: limina
+      POSTGRES_PASSWORD: limina-local
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U limina -d limina"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - limina-postgres:/var/lib/postgresql/data
+
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile.cloud
+    command: ["limina", "db", "upgrade"]
+    environment:
+      LIMINA_DATABASE_URL: postgresql+psycopg://limina:limina-local@postgres/limina
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  runtime:
+    build:
+      context: .
+      dockerfile: Dockerfile.cloud
+    environment:
+      LIMINA_DATABASE_URL: postgresql+psycopg://limina:limina-local@postgres/limina
+      LIMINA_API_TOKEN: ${LIMINA_API_TOKEN:-}
+      LIMINA_ADMIN_API_TOKEN: ${LIMINA_ADMIN_API_TOKEN:-}
+      LIMINA_OIDC_ISSUER: ${LIMINA_OIDC_ISSUER:-}
+      LIMINA_OIDC_AUDIENCE: ${LIMINA_OIDC_AUDIENCE:-}
+      LIMINA_OIDC_JWKS_URL: ${LIMINA_OIDC_JWKS_URL:-}
+      LIMINA_OIDC_ALGORITHMS: ${LIMINA_OIDC_ALGORITHMS:-RS256}
+      LIMINA_OIDC_ADMIN_CLAIM: ${LIMINA_OIDC_ADMIN_CLAIM:-}
+      LIMINA_OIDC_ADMIN_VALUE: ${LIMINA_OIDC_ADMIN_VALUE:-admin}
+      LIMINA_OIDC_LEEWAY_SECONDS: ${LIMINA_OIDC_LEEWAY_SECONDS:-30}
+      LIMINA_CORS_ORIGINS: ${LIMINA_CORS_ORIGINS:-}
+      LIMINA_CODEX_MODEL: ${LIMINA_CODEX_MODEL:-gpt-5.4}
+      LIMINA_CODEX_SANDBOX: ${LIMINA_CODEX_SANDBOX:-workspace-write}
+      LIMINA_CODEX_AUTH_MODE: ${LIMINA_CODEX_AUTH_MODE:-auto}
+      LIMINA_CLAUDE_MODEL: ${LIMINA_CLAUDE_MODEL:-}
+      LIMINA_MCP_ALLOWED_HOSTS: ${LIMINA_MCP_ALLOWED_HOSTS:-127.0.0.1:*,localhost:*,[::1]:*}
+      LIMINA_MCP_ALLOWED_ORIGINS: ${LIMINA_MCP_ALLOWED_ORIGINS:-http://127.0.0.1:*,http://localhost:*,http://[::1]:*}
+      LIMINA_UPLOAD_LIMIT_BYTES: ${LIMINA_UPLOAD_LIMIT_BYTES:-26214400}
+      LIMINA_SECRET_KEY: ${LIMINA_SECRET_KEY:-}
+      LIMINA_SECRET_KEY_PATH: /var/lib/limina/secret.key
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      CODEX_ACCESS_TOKEN: ${CODEX_ACCESS_TOKEN:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+    ports:
+      - "7433:7433"
+    command: ["limina", "serve", "--host", "0.0.0.0", "--port", "7433"]
+    volumes:
+      - limina-data:/var/lib/limina
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:7433/readyz', timeout=2).read()"]
+
+volumes:
+  limina-postgres:
+  limina-data:

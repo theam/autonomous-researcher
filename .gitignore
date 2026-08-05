@@ -9,6 +9,7 @@ build/
 venv/
 .venv/
 env/
+.pytest_cache/
 
 # Jupyter
 .ipynb_checkpoints/
@@ -20,6 +21,10 @@ kb/research/data/*.json
 kb/research/data/*.pkl
 kb/research/data/*.h5
 !kb/research/data/.gitkeep
+
+# Local cloud runtime state and exports
+.limina/
+kb-export/
 
 # OS
 .DS_Store

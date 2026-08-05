@@ -1,0 +1,15 @@
+.git
+.github
+.codex
+.env
+.venv
+.limina
+__pycache__
+*.pyc
+*.pyo
+*.db
+dist
+build
+kb
+kb-export
+tests

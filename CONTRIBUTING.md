@@ -7,7 +7,7 @@ Thanks for improving Limina. The project is intentionally small: Markdown contra
 ```bash
 git clone https://github.com/theam/limina.git
 cd limina
-python3 -m pip install -r requirements.txt
+uv sync --locked --all-extras --dev
 make test
 make validate
 ```
@@ -32,7 +32,7 @@ make install-skills
 - [ ] `make test` passes.
 - [ ] `make validate` passes.
 - [ ] No generated, private, or large local artifacts are committed.
-- [ ] New dependencies are justified and added to `requirements.txt`.
+- [ ] New dependencies are justified in `pyproject.toml` and `uv.lock` is refreshed.
 
 ## Style
 
