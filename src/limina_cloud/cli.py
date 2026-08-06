@@ -517,9 +517,9 @@ def attach(ctx: typer.Context, project: str) -> None:
     stop_reader = threading.Event()
     try:
         with websocket_connect(
-            f"{ws_url}/v1/projects/{project}/live",
+            f"{ws_url}/v2/projects/{project}/live",
             additional_headers=headers,
-            subprotocols=["limina.v1"],
+            subprotocols=["limina.v2"],
         ) as socket:
             state.console.print(
                 Panel(

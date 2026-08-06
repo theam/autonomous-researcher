@@ -1,5 +1,9 @@
 # UI-ready backend: implementation and rationale
 
+> Historical contract note (2026-08-06): this document preserves the original
+> `/v1` backend handoff. Limina Console subsequently replaced the public API with
+> `/v2`; current routes and generated types are documented in `docs/limina-console.md`.
+
 ## Outcome
 
 Limina now exposes the backend contract for an observability, analytics, knowledge, steering, and

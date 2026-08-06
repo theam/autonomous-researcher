@@ -1,0 +1,21 @@
+{
+	auto_https off
+	admin off
+}
+
+:7433 {
+	encode zstd gzip
+
+	@live path_regexp live ^/v2/projects/[^/]+/live$
+	reverse_proxy @live 127.0.0.1:7434
+
+	reverse_proxy 127.0.0.1:3000
+
+	header {
+		-Server
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		X-Frame-Options DENY
+		Permissions-Policy "camera=(), geolocation=(), microphone=(), payment=(), usb=()"
+	}
+}

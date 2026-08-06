@@ -115,7 +115,7 @@ class CloudMcpTests(unittest.TestCase):
         self.assertEqual(first["runtime"], "claude-code")
 
         project = self.client.get(
-            "/v1/projects/mcp-project",
+            "/v2/projects/mcp-project",
             headers={"Authorization": "Bearer secret"},
         )
         self.assertEqual(project.status_code, 200, project.text)
@@ -144,12 +144,12 @@ class CloudMcpTests(unittest.TestCase):
         self.assertEqual(variable["type"], "VARIABLE")
 
         resources = self.client.get(
-            "/v1/projects/mcp-project/resources",
+            "/v2/projects/mcp-project/resources",
             headers={"Authorization": "Bearer secret"},
         ).json()
         self.assertEqual(resources, [variable])
         events = self.client.get(
-            "/v1/projects/mcp-project/events",
+            "/v2/projects/mcp-project/events",
             headers={"Authorization": "Bearer secret"},
         ).json()["events"]
         self.assertEqual(events[0]["actor"], "maya")

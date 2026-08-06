@@ -130,7 +130,7 @@ class UiReadinessTests(unittest.TestCase):
 
     def create_project(self, slug: str = "ui-ready") -> None:
         response = self.client.post(
-            "/v1/projects",
+            "/v2/projects",
             headers=self.command("owner-token"),
             json={
                 "slug": slug,
@@ -144,17 +144,19 @@ class UiReadinessTests(unittest.TestCase):
     def test_oidc_principals_and_project_roles_are_enforced_centrally(self) -> None:
         self.create_project()
 
-        owner_projects = self.client.get("/v1/projects", headers=self.auth("owner-token")).json()
-        viewer_projects = self.client.get("/v1/projects", headers=self.auth("viewer-token")).json()
+        owner_projects = self.client.get("/v2/projects", headers=self.auth("owner-token")).json()
+        viewer_projects = self.client.get("/v2/projects", headers=self.auth("viewer-token")).json()
+        admin_projects = self.client.get("/v2/projects", headers=self.auth("admin-token")).json()
         self.assertEqual(owner_projects["total"], 1)
         self.assertEqual(viewer_projects["total"], 0)
+        self.assertEqual(admin_projects["total"], 0)
         self.assertEqual(
-            self.client.get("/v1/projects/ui-ready", headers=self.auth("viewer-token")).status_code,
+            self.client.get("/v2/projects/ui-ready", headers=self.auth("viewer-token")).status_code,
             403,
         )
 
         member = self.client.put(
-            "/v1/projects/ui-ready/members",
+            "/v2/projects/ui-ready/members",
             headers=self.auth("owner-token"),
             json={
                 "subject": "viewer",
@@ -165,18 +167,18 @@ class UiReadinessTests(unittest.TestCase):
         )
         self.assertEqual(member.status_code, 200, member.text)
         self.assertEqual(
-            self.client.get("/v1/projects/ui-ready", headers=self.auth("viewer-token")).status_code,
+            self.client.get("/v2/projects/ui-ready", headers=self.auth("viewer-token")).status_code,
             200,
         )
         denied = self.client.post(
-            "/v1/projects/ui-ready/actions/start",
+            "/v2/projects/ui-ready/actions/start",
             headers=self.command("viewer-token"),
         )
         self.assertEqual(denied.status_code, 403, denied.text)
         self.assertEqual(denied.json()["error"]["code"], "permission_denied")
 
         orphan = self.client.put(
-            "/v1/projects/ui-ready/members",
+            "/v2/projects/ui-ready/members",
             headers=self.auth("owner-token"),
             json={
                 "subject": "owner",
@@ -188,7 +190,7 @@ class UiReadinessTests(unittest.TestCase):
         self.assertIn("retain at least one owner", orphan.text)
 
         events = self.client.get(
-            "/v1/projects/ui-ready/events", headers=self.auth("owner-token")
+            "/v2/projects/ui-ready/events", headers=self.auth("owner-token")
         ).json()["events"]
         self.assertEqual(events[0]["actor"], "Olivia Owner")
         self.assertNotIn("spoofed actor", str(events))
@@ -197,7 +199,7 @@ class UiReadinessTests(unittest.TestCase):
         key = "shared-client-key"
         for token, slug in (("owner-token", "first"), ("same-name-token", "second")):
             response = self.client.post(
-                "/v1/projects",
+                "/v2/projects",
                 headers=self.command(token, key),
                 json={
                     "slug": slug,
@@ -209,15 +211,15 @@ class UiReadinessTests(unittest.TestCase):
             self.assertEqual(response.status_code, 201, response.text)
             self.assertEqual(response.json()["slug"], slug)
 
-        first = self.client.get("/v1/projects", headers=self.auth("owner-token")).json()
-        second = self.client.get("/v1/projects", headers=self.auth("same-name-token")).json()
+        first = self.client.get("/v2/projects", headers=self.auth("owner-token")).json()
+        second = self.client.get("/v2/projects", headers=self.auth("same-name-token")).json()
         self.assertEqual([item["slug"] for item in first["items"]], ["first"])
         self.assertEqual([item["slug"] for item in second["items"]], ["second"])
 
     def test_browser_ticket_is_single_use_and_supports_read_only_viewers(self) -> None:
         self.create_project()
         self.client.put(
-            "/v1/projects/ui-ready/members",
+            "/v2/projects/ui-ready/members",
             headers=self.auth("owner-token"),
             json={
                 "subject": "viewer",
@@ -226,13 +228,13 @@ class UiReadinessTests(unittest.TestCase):
             },
         )
         ticket = self.client.post(
-            "/v1/projects/ui-ready/live-ticket", headers=self.auth("viewer-token")
+            "/v2/projects/ui-ready/live-ticket", headers=self.auth("viewer-token")
         )
         self.assertEqual(ticket.status_code, 200, ticket.text)
         value = ticket.json()["ticket"]
         with self.client.websocket_connect(
-            "/v1/projects/ui-ready/live",
-            subprotocols=["limina.v1", f"limina.ticket.{value}"],
+            "/v2/projects/ui-ready/live",
+            subprotocols=["limina.v2", f"limina.ticket.{value}"],
         ) as socket:
             self.assertEqual(socket.receive_json()["type"], "snapshot")
             socket.send_json({"type": "steer", "body": "Try to mutate."})
@@ -245,46 +247,37 @@ class UiReadinessTests(unittest.TestCase):
         with (
             self.assertRaises(WebSocketDisconnect),
             self.client.websocket_connect(
-                "/v1/projects/ui-ready/live",
-                subprotocols=["limina.v1", f"limina.ticket.{value}"],
+                "/v2/projects/ui-ready/live",
+                subprotocols=["limina.v2", f"limina.ticket.{value}"],
             ),
         ):
             pass
 
         admin_ticket = self.client.post(
-            "/v1/projects/ui-ready/live-ticket", headers=self.auth("admin-token")
-        ).json()["ticket"]
-        with self.client.websocket_connect(
-            "/v1/projects/ui-ready/live",
-            subprotocols=["limina.v1", f"limina.ticket.{admin_ticket}"],
-        ) as socket:
-            self.assertEqual(socket.receive_json()["type"], "snapshot")
-            socket.send_json({"type": "steer", "body": "Review the current strategy."})
-            delivery = socket.receive_json()
-            while delivery["type"] == "event":
-                delivery = socket.receive_json()
-            self.assertEqual(delivery["type"], "delivery")
+            "/v2/projects/ui-ready/live-ticket", headers=self.auth("admin-token")
+        )
+        self.assertEqual(admin_ticket.status_code, 403, admin_ticket.text)
 
     def test_kickoff_knowledge_sources_runs_and_analytics_are_queryable(self) -> None:
         self.create_project()
         updated = self.client.patch(
-            "/v1/projects/ui-ready",
-            headers=self.auth("owner-token"),
-            json={"context": "A richer kickoff context."},
+            "/v2/projects/ui-ready",
+            headers=self.command("owner-token"),
+            json={"expected_version": 1, "context": "A richer kickoff context."},
         )
         self.assertEqual(updated.status_code, 200, updated.text)
         self.assertEqual(updated.json()["context"], "A richer kickoff context.")
         self.assertEqual(
-            self.client.get("/v1/project-templates", headers=self.auth("owner-token")).status_code,
+            self.client.get("/v2/project-templates", headers=self.auth("owner-token")).status_code,
             200,
         )
         preflight = self.client.get(
-            "/v1/projects/ui-ready/preflight", headers=self.auth("owner-token")
+            "/v2/projects/ui-ready/preflight", headers=self.auth("owner-token")
         )
         self.assertTrue(preflight.json()["ready"])
 
         source = self.client.put(
-            "/v1/projects/ui-ready/sources",
+            "/v2/projects/ui-ready/sources",
             headers=self.auth("owner-token"),
             json={
                 "name": "benchmark",
@@ -295,7 +288,7 @@ class UiReadinessTests(unittest.TestCase):
         )
         self.assertEqual(source.status_code, 200, source.text)
         credential_source = self.client.put(
-            "/v1/projects/ui-ready/sources",
+            "/v2/projects/ui-ready/sources",
             headers=self.auth("owner-token"),
             json={
                 "name": "unsafe",
@@ -305,7 +298,7 @@ class UiReadinessTests(unittest.TestCase):
         )
         self.assertEqual(credential_source.status_code, 422, credential_source.text)
         connector_credential = self.client.put(
-            "/v1/projects/ui-ready/sources",
+            "/v2/projects/ui-ready/sources",
             headers=self.auth("owner-token"),
             json={
                 "name": "unsafe-connector",
@@ -315,7 +308,7 @@ class UiReadinessTests(unittest.TestCase):
         )
         self.assertEqual(connector_credential.status_code, 422, connector_credential.text)
         upload = self.client.post(
-            "/v1/projects/ui-ready/sources/upload",
+            "/v2/projects/ui-ready/sources/upload",
             headers=self.auth("owner-token"),
             data={"name": "brief"},
             files={"file": ("brief.md", b"# Brief\nEvidence", "text/markdown")},
@@ -347,54 +340,54 @@ class UiReadinessTests(unittest.TestCase):
             command_id=str(uuid4()),
         )
         search = self.client.get(
-            "/v1/projects/ui-ready/knowledge?query=retrieval",
+            "/v2/projects/ui-ready/knowledge?query=retrieval",
             headers=self.auth("owner-token"),
         )
         self.assertEqual(search.status_code, 200, search.text)
         self.assertEqual(search.json()["items"][0]["id"], first["id"])
         self.assertEqual(search.json()["search_backend"], "portable-substring")
         wildcard = self.client.get(
-            "/v1/projects/ui-ready/knowledge?query=%25",
+            "/v2/projects/ui-ready/knowledge?query=%25",
             headers=self.auth("owner-token"),
         )
         self.assertEqual(wildcard.json()["total"], 0)
         first_page = self.client.get(
-            "/v1/projects/ui-ready/knowledge?limit=1",
+            "/v2/projects/ui-ready/knowledge?limit=1",
             headers=self.auth("owner-token"),
         ).json()
         self.assertIsNotNone(first_page["next_cursor"])
         second_page = self.client.get(
-            f"/v1/projects/ui-ready/knowledge?limit=1&cursor={first_page['next_cursor']}",
+            f"/v2/projects/ui-ready/knowledge?limit=1&cursor={first_page['next_cursor']}",
             headers=self.auth("owner-token"),
         ).json()
         self.assertNotEqual(first_page["items"][0]["id"], second_page["items"][0]["id"])
         tagged = self.client.put(
-            f"/v1/projects/ui-ready/knowledge/{first['id']}/tags/retrieval",
+            f"/v2/projects/ui-ready/knowledge/{first['id']}/tags/retrieval",
             headers=self.auth("owner-token"),
         )
         self.assertEqual(tagged.status_code, 200, tagged.text)
         self.assertEqual(tagged.json()["tags"], ["retrieval"])
         tag_search = self.client.get(
-            "/v1/projects/ui-ready/knowledge?tag=retrieval",
+            "/v2/projects/ui-ready/knowledge?tag=retrieval",
             headers=self.auth("owner-token"),
         )
         self.assertEqual(tag_search.json()["total"], 1)
         self.assertEqual(tag_search.json()["items"][0]["tags"], ["retrieval"])
 
         relation = self.client.post(
-            "/v1/projects/ui-ready/knowledge/relations",
+            "/v2/projects/ui-ready/knowledge/relations",
             headers=self.auth("owner-token"),
             json={"source_id": first["id"], "target_id": second["id"], "type": "SUPPORTS"},
         )
         self.assertEqual(relation.status_code, 201, relation.text)
         graph = self.client.get(
-            "/v1/projects/ui-ready/knowledge/graph", headers=self.auth("owner-token")
+            "/v2/projects/ui-ready/knowledge/graph", headers=self.auth("owner-token")
         ).json()
         self.assertEqual(len(graph["nodes"]), 2)
         self.assertEqual(graph["edges"][0]["type"], "SUPPORTS")
 
         comment = self.client.post(
-            f"/v1/projects/ui-ready/knowledge/{first['id']}/comments",
+            f"/v2/projects/ui-ready/knowledge/{first['id']}/comments",
             headers=self.command("owner-token"),
             json={"body": "Please test vocabulary drift."},
         )
@@ -413,39 +406,39 @@ class UiReadinessTests(unittest.TestCase):
         )
         reused_key = "predictable-comment-key"
         original = self.client.post(
-            f"/v1/projects/ui-ready/knowledge/{first['id']}/comments",
+            f"/v2/projects/ui-ready/knowledge/{first['id']}/comments",
             headers=self.command("owner-token", reused_key),
             json={"body": "Private project comment."},
         )
         self.assertEqual(original.status_code, 201, original.text)
         collision = self.client.post(
-            f"/v1/projects/comment-boundary/knowledge/{other['id']}/comments",
+            f"/v2/projects/comment-boundary/knowledge/{other['id']}/comments",
             headers=self.command("owner-token", reused_key),
             json={"body": "A different comment."},
         )
         self.assertEqual(collision.status_code, 409, collision.text)
         self.assertNotIn("Private project comment", collision.text)
         revisions = self.client.get(
-            f"/v1/projects/ui-ready/knowledge/{first['id']}/revisions",
+            f"/v2/projects/ui-ready/knowledge/{first['id']}/revisions",
             headers=self.auth("owner-token"),
         )
         self.assertEqual(revisions.status_code, 200, revisions.text)
         self.assertEqual(revisions.json()[0]["version"], 1)
         view = self.client.put(
-            "/v1/projects/ui-ready/knowledge/views",
+            "/v2/projects/ui-ready/knowledge/views",
             headers=self.auth("owner-token"),
             json={"name": "Open hypotheses", "query": {"kind": "H", "status": "PROPOSED"}},
         )
         self.assertEqual(view.status_code, 200, view.text)
 
         guidance = self.client.post(
-            "/v1/projects/ui-ready/steering",
+            "/v2/projects/ui-ready/steering",
             headers=self.command("owner-token"),
             json={"body": "Prioritize the strongest evidence.", "kind": "STEER"},
         )
         self.assertEqual(guidance.status_code, 202, guidance.text)
         started = self.client.post(
-            "/v1/projects/ui-ready/actions/start", headers=self.command("owner-token")
+            "/v2/projects/ui-ready/actions/start", headers=self.command("owner-token")
         )
         self.assertEqual(started.status_code, 200, started.text)
 
@@ -453,7 +446,7 @@ class UiReadinessTests(unittest.TestCase):
         runs = None
         while time.monotonic() < deadline:
             runs = self.client.get(
-                "/v1/projects/ui-ready/runs", headers=self.auth("owner-token")
+                "/v2/projects/ui-ready/runs", headers=self.auth("owner-token")
             ).json()
             if runs["items"] and runs["items"][0]["status"] == "COMPLETED":
                 break
@@ -464,7 +457,7 @@ class UiReadinessTests(unittest.TestCase):
         self.assertEqual(run["usage"]["input_tokens"], 120)
         self.assertEqual(run["tool_calls"], 1)
         detail = self.client.get(
-            f"/v1/projects/ui-ready/runs/{run['id']}", headers=self.auth("owner-token")
+            f"/v2/projects/ui-ready/runs/{run['id']}", headers=self.auth("owner-token")
         )
         self.assertEqual(detail.status_code, 200, detail.text)
         self.assertGreaterEqual(len(detail.json()["events"]), 3)
@@ -473,19 +466,19 @@ class UiReadinessTests(unittest.TestCase):
         self.assertIn("Updating durable project knowledge", detail.text)
 
         history = self.client.get(
-            "/v1/projects/ui-ready/guidance", headers=self.auth("owner-token")
+            "/v2/projects/ui-ready/guidance", headers=self.auth("owner-token")
         ).json()
         self.assertEqual(history["items"][0]["body"], "Prioritize the strongest evidence.")
         self.assertEqual(history["items"][0]["status"], "ACKNOWLEDGED")
         analytics = self.client.get(
-            "/v1/projects/ui-ready/analytics", headers=self.auth("owner-token")
+            "/v2/projects/ui-ready/analytics", headers=self.auth("owner-token")
         )
         self.assertEqual(analytics.status_code, 200, analytics.text)
         self.assertEqual(analytics.json()["runs"]["total"], 1)
         self.assertEqual(analytics.json()["knowledge"]["by_kind"]["H"], 2)
 
-        schema = self.client.get("/openapi.json").json()
-        knowledge_schema = schema["paths"]["/v1/projects/{slug}/knowledge"]["get"]["responses"][
+        schema = self.client.get("/v2/openapi.json").json()
+        knowledge_schema = schema["paths"]["/v2/projects/{slug}/knowledge"]["get"]["responses"][
             "200"
         ]["content"]["application/json"]["schema"]
         self.assertEqual(knowledge_schema, {"$ref": "#/components/schemas/KnowledgePage"})

@@ -24,14 +24,14 @@ runtime-test:
 	$(UV) run python -m unittest discover -s tests
 
 runtime-lint:
-	$(UV) run ruff format --check src migrations tests/test_cloud_*.py
-	$(UV) run ruff check src migrations tests/test_cloud_*.py
+	$(UV) run ruff format --check src migrations tests/test_cloud_*.py tests/test_console_*.py
+	$(UV) run ruff check src migrations tests/test_cloud_*.py tests/test_console_*.py
 
 runtime-schema-sql:
 	LIMINA_DATABASE_URL=postgresql+psycopg://limina:limina@localhost/limina $(UV) run alembic upgrade head --sql >/dev/null
 
 runtime-compose:
 	OPENAI_API_KEY=test ANTHROPIC_API_KEY=test LIMINA_API_TOKEN=test docker compose config >/dev/null
-	OPENAI_API_KEY=test ANTHROPIC_API_KEY=test LIMINA_API_TOKEN=test docker compose -f compose.cloud.yaml config >/dev/null
+	OPENAI_API_KEY=test ANTHROPIC_API_KEY=test LIMINA_API_TOKEN=test LIMINA_UI_AUTH_MODE=local LIMINA_ALLOW_LOCAL_AUTH=1 LIMINA_CONSOLE_DEV_AUTH=1 LIMINA_DEV_JWT_SECRET=test-only-secret-000000000000000000000000 docker compose -f compose.cloud.yaml config >/dev/null
 
 runtime-check: runtime-lint runtime-test runtime-schema-sql runtime-compose validate

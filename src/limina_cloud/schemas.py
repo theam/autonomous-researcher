@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, SecretStr
 
 
 class StrictModel(BaseModel):
@@ -14,7 +14,7 @@ class StrictModel(BaseModel):
 class ErrorDetail(StrictModel):
     code: str
     message: str
-    details: dict[str, Any] = Field(default_factory=dict)
+    details: dict[str, JsonValue] = Field(default_factory=dict)
 
 
 class ErrorResponse(StrictModel):
@@ -25,7 +25,7 @@ class HealthResponse(StrictModel):
     ok: bool
     version: str
     runtime_owner: Literal["limina"]
-    auth_mode: Literal["local", "oidc"]
+    auth_mode: Literal["local", "oidc", "workos", "dev-jwt"]
     runtimes: list[Literal["codex", "claude-code"]]
     interfaces: dict[str, str]
 
@@ -58,6 +58,7 @@ class CodexDeviceLogin(StrictModel):
 
 class ProjectResponse(StrictModel):
     slug: str
+    version: int
     name: str
     mission: str
     success_criteria: str
@@ -67,6 +68,9 @@ class ProjectResponse(StrictModel):
     current_objective: str
     next_step: str
     blocker: str
+    role: Literal["OWNER", "EDITOR", "VIEWER"] | None = None
+    capabilities: list[str] = Field(default_factory=list)
+    allowed_actions: list[str] = Field(default_factory=list)
     created_at: str
     updated_at: str
 
@@ -86,12 +90,42 @@ class ObservationResponse(StrictModel):
     created_at: str
 
 
+class HypothesisContent(StrictModel):
+    statement: str
+    mechanism: str
+    generalization: str
+    shortcut_risks: str
+    test_plan: str
+    conclusion: str
+
+
+class ExperimentContent(StrictModel):
+    objective: str
+    procedure: str
+    success_criteria: str
+    guardrails: str
+    results: str
+    analysis: str
+    decision: str
+    completed_at: str | None
+
+
+class FindingContent(StrictModel):
+    finding: str
+    evidence: str
+    improvement: str
+    remaining_debt: str
+    next_move: str
+    impact: Literal["CRITICAL", "HIGH", "MEDIUM", "LOW"]
+
+
 class ArtifactResponse(StrictModel):
     id: str
     kind: str
     title: str
     status: str
-    content: dict[str, Any]
+    content: HypothesisContent | ExperimentContent | FindingContent | dict[str, JsonValue]
+    version: int
     hypothesis_id: str | None = None
     experiment_id: str | None = None
     created_at: str
@@ -112,7 +146,7 @@ class EventResponse(StrictModel):
     type: str
     actor: str
     artifact_id: str | None
-    detail: dict[str, Any]
+    detail: dict[str, JsonValue]
     created_at: str
 
 
@@ -163,11 +197,17 @@ class CreateProjectRequest(StrictModel):
 
 
 class UpdateProjectRequest(StrictModel):
+    expected_version: int = Field(ge=1)
     name: str | None = Field(default=None, min_length=1, max_length=240)
     mission: str | None = Field(default=None, min_length=1)
     success_criteria: str | None = Field(default=None, min_length=1)
     context: str | None = None
     runtime: Literal["codex", "claude-code"] | None = None
+
+
+class CloneProjectRequest(StrictModel):
+    slug: str = Field(min_length=1, max_length=120)
+    name: str = Field(min_length=1, max_length=240)
 
 
 class SteeringRequest(StrictModel):
@@ -256,7 +296,7 @@ class RevisionResponse(StrictModel):
     version: int
     status: str
     title: str
-    content: dict[str, Any]
+    content: HypothesisContent | ExperimentContent | FindingContent | dict[str, JsonValue]
     actor: str
     created_at: str
 
@@ -279,13 +319,13 @@ class TagResponse(StrictModel):
 
 class SavedViewRequest(StrictModel):
     name: str = Field(min_length=1, max_length=160)
-    query: dict[str, Any]
+    query: dict[str, JsonValue]
 
 
 class SavedViewResponse(StrictModel):
     id: str
     name: str
-    query: dict[str, Any]
+    query: dict[str, JsonValue]
     created_by: str
     created_at: str
     updated_at: str
@@ -296,7 +336,7 @@ class SourceRequest(StrictModel):
     type: Literal["URL", "CONNECTOR"]
     uri: str = Field(min_length=1)
     media_type: str | None = Field(default=None, max_length=200)
-    metadata: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, JsonValue] = Field(default_factory=dict)
 
 
 class SourceResponse(StrictModel):
@@ -305,7 +345,7 @@ class SourceResponse(StrictModel):
     type: Literal["URL", "CONNECTOR", "UPLOAD"]
     uri: str
     media_type: str | None
-    metadata: dict[str, Any]
+    metadata: dict[str, JsonValue]
     status: str
     created_at: str
     updated_at: str

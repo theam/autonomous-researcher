@@ -17,6 +17,7 @@ from starlette.testclient import TestClient  # noqa: E402
 
 from limina_cloud.api import create_app  # noqa: E402
 from limina_cloud.models import Event  # noqa: E402
+from limina_cloud.notification_service import TransportResult  # noqa: E402
 from limina_cloud.runtime import RuntimeDecision, RuntimeTurn  # noqa: E402
 
 
@@ -119,7 +120,7 @@ class CloudApiTests(unittest.TestCase):
 
     def create_project(self, slug: str = "cloud-test"):
         return self.client.post(
-            "/v1/projects",
+            "/v2/projects",
             json={
                 "slug": slug,
                 "name": "Cloud test",
@@ -139,12 +140,20 @@ class CloudApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["runtime_owner"], "limina")
         self.assertEqual(response.json()["runtimes"], ["codex", "claude-code"])
+        self.assertEqual(response.json()["interfaces"]["rest"], "/v2")
 
-        schema = self.client.get("/openapi.json", headers=self.auth).json()
+        schema = self.client.get("/v2/openapi.json", headers=self.auth).json()
         self.assertIn("HTTPBearer", schema["components"]["securitySchemes"])
         paths = " ".join(schema["paths"])
+        self.assertFalse(any(path.startswith("/v1") for path in schema["paths"]))
+        self.assertFalse(any(path.startswith("/internal/") for path in schema["paths"]))
         for forbidden in ("worker", "thread", "session", "coordinator", "lease"):
             self.assertNotIn(forbidden, paths)
+
+    def test_legacy_public_v1_routes_are_not_mounted(self) -> None:
+        for path in ("/v1/projects", "/v1/runtime/engines/codex/auth"):
+            with self.subTest(path=path):
+                self.assertEqual(self.client.get(path, headers=self.auth).status_code, 404)
 
     def test_failed_authentication_is_rate_limited(self) -> None:
         invalid = {"Authorization": "Bearer wrong"}
@@ -155,7 +164,7 @@ class CloudApiTests(unittest.TestCase):
         self.assertGreaterEqual(limited.json()["error"]["details"]["retry_after_seconds"], 1)
 
     def test_runtime_authentication_requires_the_distinct_admin_token(self) -> None:
-        path = "/v1/runtime/engines/codex/auth"
+        path = "/v2/runtime/engines/codex/auth"
         self.assertEqual(self.client.get(path, headers=self.auth).status_code, 403)
         status = self.client.get(path, headers=self.admin_auth)
         self.assertEqual(status.status_code, 200, status.text)
@@ -171,23 +180,23 @@ class CloudApiTests(unittest.TestCase):
             "success_criteria": "Round-trip state through HTTP.",
         }
         first = self.client.post(
-            "/v1/projects", json=payload, headers=self.command_headers(replay_key)
+            "/v2/projects", json=payload, headers=self.command_headers(replay_key)
         )
         second = self.client.post(
-            "/v1/projects", json=payload, headers=self.command_headers(replay_key)
+            "/v2/projects", json=payload, headers=self.command_headers(replay_key)
         )
         self.assertEqual(first.status_code, 201, first.text)
         self.assertEqual(first.json(), second.json())
         self.assertEqual(first.json()["status"], "CREATED")
         self.assertEqual(first.json()["runtime"], "codex")
         created_events = self.client.get(
-            "/v1/projects/cloud-test/events", headers=self.auth
+            "/v2/projects/cloud-test/events", headers=self.auth
         ).json()["events"]
         self.assertEqual(created_events[0]["detail"]["runtime"], "codex")
         self.assertNotIn("runtime_engine", created_events[0]["detail"])
 
         variable = self.client.put(
-            "/v1/projects/cloud-test/resources/variables/SOURCE_URL",
+            "/v2/projects/cloud-test/resources/variables/SOURCE_URL",
             json={"value": "https://example.invalid/repository"},
             headers=self.command_headers(),
         )
@@ -197,7 +206,7 @@ class CloudApiTests(unittest.TestCase):
 
         secret_value = "super-sensitive-token-123"
         secret = self.client.put(
-            "/v1/projects/cloud-test/resources/secrets/SOURCE_TOKEN",
+            "/v2/projects/cloud-test/resources/secrets/SOURCE_TOKEN",
             json={"value": secret_value},
             headers=self.command_headers(),
         )
@@ -207,21 +216,21 @@ class CloudApiTests(unittest.TestCase):
         self.assertNotIn("value", secret.json())
         self.assertNotIn(secret_value, secret.text)
 
-        resources = self.client.get("/v1/projects/cloud-test/resources", headers=self.auth)
+        resources = self.client.get("/v2/projects/cloud-test/resources", headers=self.auth)
         self.assertEqual(resources.status_code, 200, resources.text)
         self.assertNotIn(secret_value, resources.text)
-        review = self.client.get("/v1/projects/cloud-test/review", headers=self.auth)
-        events = self.client.get("/v1/projects/cloud-test/events", headers=self.auth)
+        review = self.client.get("/v2/projects/cloud-test/review", headers=self.auth)
+        events = self.client.get("/v2/projects/cloud-test/events", headers=self.auth)
         self.assertNotIn(secret_value, review.text)
         self.assertNotIn(secret_value, events.text)
 
         started = self.client.post(
-            "/v1/projects/cloud-test/actions/start", headers=self.command_headers()
+            "/v2/projects/cloud-test/actions/start", headers=self.command_headers()
         )
         self.assertEqual(started.status_code, 200, started.text)
         self.assertTrue(self.session.started.wait(timeout=2))
 
-        status = self.client.get("/v1/projects/cloud-test/status", headers=self.auth)
+        status = self.client.get("/v2/projects/cloud-test/status", headers=self.auth)
         self.assertEqual(status.status_code, 200, status.text)
         serialized = status.text.lower()
         for forbidden in (
@@ -229,7 +238,6 @@ class CloudApiTests(unittest.TestCase):
             "continuation_id",
             "worker_id",
             "inbox_cursor",
-            "version",
         ):
             self.assertNotIn(forbidden, serialized)
 
@@ -242,24 +250,162 @@ class CloudApiTests(unittest.TestCase):
             "success_criteria": "The engine is persisted.",
             "runtime": "claude-code",
         }
-        created = self.client.post("/v1/projects", json=payload, headers=self.command_headers())
+        created = self.client.post("/v2/projects", json=payload, headers=self.command_headers())
         self.assertEqual(created.status_code, 201, created.text)
         self.assertEqual(created.json()["runtime"], "claude-code")
 
         payload["slug"] = "invalid-project"
         payload["runtime"] = "other"
-        rejected = self.client.post("/v1/projects", json=payload, headers=self.command_headers())
+        rejected = self.client.post("/v2/projects", json=payload, headers=self.command_headers())
         self.assertEqual(rejected.status_code, 422, rejected.text)
+
+    def test_project_draft_updates_are_revision_checked_and_clone_omits_inputs(self) -> None:
+        created = self.create_project()
+        self.assertEqual(created.status_code, 201, created.text)
+        self.assertEqual(created.json()["version"], 1)
+        update_key = str(uuid4())
+        update_payload = {
+            "expected_version": 1,
+            "name": "Reframed project",
+            "mission": "Prove safe optimistic draft updates.",
+        }
+        updated = self.client.patch(
+            "/v2/projects/cloud-test",
+            json=update_payload,
+            headers=self.command_headers(update_key),
+        )
+        replay = self.client.patch(
+            "/v2/projects/cloud-test",
+            json=update_payload,
+            headers=self.command_headers(update_key),
+        )
+        self.assertEqual(updated.status_code, 200, updated.text)
+        self.assertEqual(updated.json(), replay.json())
+        self.assertEqual(updated.json()["version"], 2)
+
+        stale = self.client.patch(
+            "/v2/projects/cloud-test",
+            json={"expected_version": 1, "name": "Stale overwrite"},
+            headers=self.command_headers(),
+        )
+        self.assertEqual(stale.status_code, 409, stale.text)
+
+        self.client.put(
+            "/v2/projects/cloud-test/resources/variables/PRIVATE_INPUT",
+            json={"value": "must-not-copy"},
+            headers=self.command_headers(),
+        )
+        self.client.put(
+            "/v2/projects/cloud-test/sources",
+            json={
+                "name": "Private source",
+                "type": "URL",
+                "uri": "https://example.test/source",
+                "media_type": None,
+                "metadata": {},
+            },
+            headers=self.command_headers(),
+        )
+        clone_key = str(uuid4())
+        clone_payload = {"slug": "cloud-copy", "name": "Cloud copy"}
+        cloned = self.client.post(
+            "/v2/projects/cloud-test/clone",
+            json=clone_payload,
+            headers=self.command_headers(clone_key),
+        )
+        clone_replay = self.client.post(
+            "/v2/projects/cloud-test/clone",
+            json=clone_payload,
+            headers=self.command_headers(clone_key),
+        )
+        self.assertEqual(cloned.status_code, 201, cloned.text)
+        self.assertEqual(cloned.json(), clone_replay.json())
+        self.assertEqual(cloned.json()["mission"], updated.json()["mission"])
+        self.assertEqual(
+            self.client.get("/v2/projects/cloud-copy/resources", headers=self.auth).json(), []
+        )
+        self.assertEqual(
+            self.client.get("/v2/projects/cloud-copy/sources", headers=self.auth).json(), []
+        )
+        members = self.client.get("/v2/projects/cloud-copy/members", headers=self.auth).json()
+        self.assertEqual(len(members), 1)
+        self.assertEqual(members[0]["role"], "OWNER")
+
+    def test_notification_configuration_is_write_only_and_idempotent(self) -> None:
+        self.assertEqual(self.create_project().status_code, 201)
+        self.app.state.runtime.notifications.resolver = lambda _host, _port: ["93.184.216.34"]
+        self.app.state.runtime.notifications.sender = lambda _url, _headers, _body: TransportResult(
+            204
+        )
+        channel_key = str(uuid4())
+        channel_payload = {
+            "type": "GENERIC_WEBHOOK",
+            "display_name": "Operator webhook",
+            "destination": "https://notify.example.test/limina",
+            "signing_secret": "write-only-signing-secret",
+            "trust_delegation_confirmed": True,
+        }
+        channel = self.client.post(
+            "/v2/projects/cloud-test/notifications/channels",
+            json=channel_payload,
+            headers=self.command_headers(channel_key),
+        )
+        replay = self.client.post(
+            "/v2/projects/cloud-test/notifications/channels",
+            json=channel_payload,
+            headers=self.command_headers(channel_key),
+        )
+        self.assertEqual(channel.status_code, 201, channel.text)
+        self.assertEqual(replay.json(), channel.json())
+        self.assertNotIn("write-only-signing-secret", channel.text)
+        self.assertNotIn("notify.example.test/limina", channel.text)
+
+        rule_key = str(uuid4())
+        rule_payload = {
+            "channel_id": channel.json()["id"],
+            "display_name": "High-priority questions",
+            "attention_types": ["agent_request"],
+            "severities": ["CRITICAL", "HIGH"],
+            "cooldown_seconds": 300,
+        }
+        rule = self.client.post(
+            "/v2/projects/cloud-test/notifications/rules",
+            json=rule_payload,
+            headers=self.command_headers(rule_key),
+        )
+        rule_replay = self.client.post(
+            "/v2/projects/cloud-test/notifications/rules",
+            json=rule_payload,
+            headers=self.command_headers(rule_key),
+        )
+        self.assertEqual(rule.status_code, 201, rule.text)
+        self.assertEqual(rule_replay.json(), rule.json())
+        self.assertEqual(
+            len(
+                self.client.get(
+                    "/v2/projects/cloud-test/notifications/channels", headers=self.auth
+                ).json()
+            ),
+            1,
+        )
+        self.assertEqual(
+            len(
+                self.client.get(
+                    "/v2/projects/cloud-test/notifications/rules", headers=self.auth
+                ).json()
+            ),
+            1,
+        )
 
     def test_live_attach_can_steer_the_active_managed_turn(self) -> None:
         self.assertEqual(self.create_project().status_code, 201)
-        self.client.post("/v1/projects/cloud-test/actions/start", headers=self.command_headers())
+        self.client.post("/v2/projects/cloud-test/actions/start", headers=self.command_headers())
         self.assertTrue(self.session.started.wait(timeout=2))
 
         with self.client.websocket_connect(
-            "/v1/projects/cloud-test/live",
+            "/v2/projects/cloud-test/live",
             headers={**self.auth, "X-Limina-Actor": "reviewer"},
-            subprotocols=["limina.v1"],
+            subprotocols=["limina.v2"],
         ) as socket:
             snapshot = socket.receive_json()
             self.assertEqual(snapshot["type"], "snapshot")
@@ -276,7 +422,7 @@ class CloudApiTests(unittest.TestCase):
         self.assertEqual(self.session.steering, ["reviewer: Prioritize generalization."])
 
         response = self.client.post(
-            "/v1/projects/cloud-test/steering",
+            "/v2/projects/cloud-test/steering",
             json={"body": "Now test the strongest baseline.", "kind": "STEER"},
             headers=self.command_headers(),
         )
@@ -310,16 +456,16 @@ class CloudApiTests(unittest.TestCase):
 
     def test_activity_cursor_replays_only_new_durable_events(self) -> None:
         self.assertEqual(self.create_project().status_code, 201)
-        first = self.client.get("/v1/projects/cloud-test/events?after=0", headers=self.auth).json()
+        first = self.client.get("/v2/projects/cloud-test/events?after=0", headers=self.auth).json()
         self.assertEqual([item["type"] for item in first["events"]], ["project.created"])
 
         self.client.put(
-            "/v1/projects/cloud-test/resources/variables/BRIEF_URI",
+            "/v2/projects/cloud-test/resources/variables/BRIEF_URI",
             json={"value": "s3://brief"},
             headers=self.command_headers(),
         )
         second = self.client.get(
-            f"/v1/projects/cloud-test/events?after={first['cursor']}", headers=self.auth
+            f"/v2/projects/cloud-test/events?after={first['cursor']}", headers=self.auth
         ).json()
         self.assertEqual(
             [item["type"] for item in second["events"]],
@@ -328,7 +474,7 @@ class CloudApiTests(unittest.TestCase):
         self.assertGreater(second["cursor"], first["cursor"])
 
     def test_domain_errors_have_stable_machine_readable_shape(self) -> None:
-        response = self.client.get("/v1/projects/missing/status", headers=self.auth)
+        response = self.client.get("/v2/projects/missing/status", headers=self.auth)
         self.assertEqual(response.status_code, 404)
         error = response.json()["error"]
         self.assertEqual(error["code"], "not_found")
@@ -348,7 +494,7 @@ class CloudApiTests(unittest.TestCase):
                 )
                 for marker in range(1005)
             )
-        review = self.client.get("/v1/projects/cloud-test/review", headers=self.auth)
+        review = self.client.get("/v2/projects/cloud-test/review", headers=self.auth)
         self.assertEqual(review.status_code, 200, review.text)
         recent = review.json()["recent_activity"]
         self.assertEqual(len(recent), 50)

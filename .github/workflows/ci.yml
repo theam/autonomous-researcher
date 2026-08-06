@@ -6,6 +6,10 @@ on:
     branches:
       - "**"
 
+permissions:
+  contents: read
+  packages: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -23,3 +27,56 @@ jobs:
         run: LIMINA_TELEMETRY_INTERNAL=1 uv run python -m unittest discover -s tests
       - name: Validate KB
         run: LIMINA_TELEMETRY_INTERNAL=1 uv run python scripts/kb_validate.py
+
+  console:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Enable pinned pnpm
+        run: corepack enable
+      - name: Install locked Console dependencies
+        working-directory: apps/web
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: pnpm install --frozen-lockfile
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: astral-sh/setup-uv@v6
+      - name: Install locked runtime dependencies
+        run: uv sync --locked --all-extras --dev
+      - name: Verify generated v2 contract
+        working-directory: apps/web
+        run: pnpm contract:check
+      - name: Verify Console static and unit gates
+        working-directory: apps/web
+        run: pnpm check:auth-boundary && pnpm typecheck && pnpm lint && pnpm test
+      - name: Install Chromium
+        working-directory: apps/web
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Start production Console stack
+        env:
+          LIMINA_UI_AUTH_MODE: local
+          LIMINA_ALLOW_LOCAL_AUTH: "1"
+          LIMINA_CONSOLE_DEV_AUTH: "1"
+          LIMINA_DEV_JWT_SECRET: ci-only-dev-jwt-secret-0000000000000000
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: docker compose -f compose.cloud.yaml up -d --build
+      - name: Run desktop, mobile, keyboard, and axe journeys
+        working-directory: apps/web
+        run: pnpm test:e2e
+      - name: Capture Console logs on failure
+        if: failure()
+        env:
+          LIMINA_UI_AUTH_MODE: local
+          LIMINA_ALLOW_LOCAL_AUTH: "1"
+        run: docker compose -f compose.cloud.yaml logs --no-color
+      - name: Stop Console stack
+        if: always()
+        env:
+          LIMINA_UI_AUTH_MODE: local
+          LIMINA_ALLOW_LOCAL_AUTH: "1"
+        run: docker compose -f compose.cloud.yaml down --volumes

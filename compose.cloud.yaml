@@ -4,7 +4,7 @@ services:
     environment:
       POSTGRES_DB: limina
       POSTGRES_USER: limina
-      POSTGRES_PASSWORD: limina-local
+      POSTGRES_PASSWORD: ${LIMINA_POSTGRES_PASSWORD:-limina-local}
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U limina -d limina"]
       interval: 2s
@@ -19,7 +19,7 @@ services:
       dockerfile: Dockerfile.cloud
     command: ["limina", "db", "upgrade"]
     environment:
-      LIMINA_DATABASE_URL: postgresql+psycopg://limina:limina-local@postgres/limina
+      LIMINA_DATABASE_URL: postgresql+psycopg://limina:${LIMINA_POSTGRES_PASSWORD:-limina-local}@postgres/limina
     depends_on:
       postgres:
         condition: service_healthy
@@ -28,34 +28,31 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.cloud
+    command: ["limina", "serve", "--host", "127.0.0.1", "--port", "7434"]
     environment:
-      LIMINA_DATABASE_URL: postgresql+psycopg://limina:limina-local@postgres/limina
-      LIMINA_API_TOKEN: ${LIMINA_API_TOKEN:-}
-      LIMINA_ADMIN_API_TOKEN: ${LIMINA_ADMIN_API_TOKEN:-}
-      LIMINA_OIDC_ISSUER: ${LIMINA_OIDC_ISSUER:-}
-      LIMINA_OIDC_AUDIENCE: ${LIMINA_OIDC_AUDIENCE:-}
-      LIMINA_OIDC_JWKS_URL: ${LIMINA_OIDC_JWKS_URL:-}
-      LIMINA_OIDC_ALGORITHMS: ${LIMINA_OIDC_ALGORITHMS:-RS256}
-      LIMINA_OIDC_ADMIN_CLAIM: ${LIMINA_OIDC_ADMIN_CLAIM:-}
-      LIMINA_OIDC_ADMIN_VALUE: ${LIMINA_OIDC_ADMIN_VALUE:-admin}
-      LIMINA_OIDC_LEEWAY_SECONDS: ${LIMINA_OIDC_LEEWAY_SECONDS:-30}
-      LIMINA_CORS_ORIGINS: ${LIMINA_CORS_ORIGINS:-}
+      LIMINA_DATABASE_URL: postgresql+psycopg://limina:${LIMINA_POSTGRES_PASSWORD:-limina-local}@postgres/limina
+      LIMINA_CONSOLE_DEV_AUTH: ${LIMINA_CONSOLE_DEV_AUTH-}
+      LIMINA_DEV_JWT_SECRET: ${LIMINA_DEV_JWT_SECRET-}
+      LIMINA_DEV_JWT_ORGANIZATION_ID: ${LIMINA_DEV_JWT_ORGANIZATION_ID-org_local}
+      LIMINA_CONSOLE_PUBLIC_URL: http://127.0.0.1:${LIMINA_CONSOLE_PORT:-7433}
+      LIMINA_WORKOS_CLIENT_ID: ${WORKOS_CLIENT_ID-}
+      LIMINA_WORKOS_ORGANIZATION_ID: ${LIMINA_WORKOS_ORGANIZATION_ID-}
+      LIMINA_WORKOS_API_HOSTNAME: ${LIMINA_WORKOS_API_HOSTNAME-}
       LIMINA_CODEX_MODEL: ${LIMINA_CODEX_MODEL:-gpt-5.4}
       LIMINA_CODEX_SANDBOX: ${LIMINA_CODEX_SANDBOX:-workspace-write}
       LIMINA_CODEX_AUTH_MODE: ${LIMINA_CODEX_AUTH_MODE:-auto}
-      LIMINA_CLAUDE_MODEL: ${LIMINA_CLAUDE_MODEL:-}
-      LIMINA_MCP_ALLOWED_HOSTS: ${LIMINA_MCP_ALLOWED_HOSTS:-127.0.0.1:*,localhost:*,[::1]:*}
-      LIMINA_MCP_ALLOWED_ORIGINS: ${LIMINA_MCP_ALLOWED_ORIGINS:-http://127.0.0.1:*,http://localhost:*,http://[::1]:*}
+      LIMINA_CLAUDE_MODEL: ${LIMINA_CLAUDE_MODEL-}
+      LIMINA_MCP_ALLOWED_HOSTS: 127.0.0.1:*,localhost:*,[::1]:*
+      LIMINA_MCP_ALLOWED_ORIGINS: http://127.0.0.1:*,http://localhost:*,http://[::1]:*
       LIMINA_UPLOAD_LIMIT_BYTES: ${LIMINA_UPLOAD_LIMIT_BYTES:-26214400}
-      LIMINA_SECRET_KEY: ${LIMINA_SECRET_KEY:-}
+      LIMINA_SECRET_KEY: ${LIMINA_SECRET_KEY-}
       LIMINA_SECRET_KEY_PATH: /var/lib/limina/secret.key
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      CODEX_ACCESS_TOKEN: ${CODEX_ACCESS_TOKEN:-}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY-}
+      CODEX_ACCESS_TOKEN: ${CODEX_ACCESS_TOKEN-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY-}
+      GITHUB_TOKEN: ${GITHUB_TOKEN-}
     ports:
-      - "7433:7433"
-    command: ["limina", "serve", "--host", "0.0.0.0", "--port", "7433"]
+      - "127.0.0.1:${LIMINA_CONSOLE_PORT:-7433}:7433"
     volumes:
       - limina-data:/var/lib/limina
     depends_on:
@@ -63,7 +60,53 @@ services:
         condition: service_completed_successfully
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:7433/readyz', timeout=2).read()"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:7434/readyz', timeout=2).read()"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  web:
+    build:
+      context: apps/web
+      dockerfile: Dockerfile
+      secrets:
+        - node_auth_token
+    network_mode: "service:runtime"
+    environment:
+      LIMINA_UI_AUTH_MODE: ${LIMINA_UI_AUTH_MODE:?Set LIMINA_UI_AUTH_MODE to local or workos}
+      LIMINA_ALLOW_LOCAL_AUTH: ${LIMINA_ALLOW_LOCAL_AUTH-}
+      LIMINA_RUNTIME_URL: http://127.0.0.1:7434
+      LIMINA_CONSOLE_ORIGIN: http://127.0.0.1:${LIMINA_CONSOLE_PORT:-7433}
+      LIMINA_DEV_JWT_SECRET: ${LIMINA_DEV_JWT_SECRET-}
+      LIMINA_DEV_JWT_ORGANIZATION_ID: ${LIMINA_DEV_JWT_ORGANIZATION_ID:-org_local}
+      WORKOS_API_KEY: ${WORKOS_API_KEY-}
+      WORKOS_CLIENT_ID: ${WORKOS_CLIENT_ID-}
+      WORKOS_COOKIE_PASSWORD: ${WORKOS_COOKIE_PASSWORD-}
+      NEXT_PUBLIC_WORKOS_REDIRECT_URI: ${NEXT_PUBLIC_WORKOS_REDIRECT_URI-http://127.0.0.1:7433/callback}
+    depends_on:
+      runtime:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1:3000/api/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  ingress:
+    image: caddy:2.10-alpine
+    network_mode: "service:runtime"
+    command: ["caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]
+    volumes:
+      - ./deploy/Caddyfile.console:/etc/caddy/Caddyfile:ro
+    depends_on:
+      web:
+        condition: service_healthy
+    restart: unless-stopped
+
+secrets:
+  node_auth_token:
+    environment: NODE_AUTH_TOKEN
 
 volumes:
   limina-postgres:

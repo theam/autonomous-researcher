@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import re
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import Annotated, Any
 from uuid import uuid4
@@ -34,11 +35,14 @@ from .auth import (
     RateLimitedAuthenticator,
     authenticator_from_environment,
 )
+from .console_api import register_console_routes
 from .database import Database
 from .errors import AuthenticationError, AuthorizationError, InvariantError, LiminaError
+from .event_broker import EventBroker
 from .exporter import MarkdownExporter
 from .internal_api import register_internal_agent_routes
 from .mcp import create_mcp_server
+from .notification_service import NotificationService
 from .operations import (
     ACTOR_LIMIT,
     PUBLIC_COMMAND_ID_LIMIT,
@@ -52,6 +56,7 @@ from .runtime_api import register_runtime_admin_routes
 from .schemas import (
     AnalyticsResponse,
     ArtifactResponse,
+    CloneProjectRequest,
     CommentRequest,
     CommentResponse,
     CreateProjectRequest,
@@ -88,7 +93,10 @@ from .schemas import (
     VariableValueRequest,
 )
 from .service import ChallengeService
+from .stream_api import register_stream_routes
 from .vault import SecretCipher
+
+logger = logging.getLogger(__name__)
 
 
 class RuntimeContext:
@@ -100,11 +108,28 @@ class RuntimeContext:
         workspace_root: Path,
         agent_factory: AgentFactory | None,
         poll_interval: float,
+        attention_reconcile_interval: float,
         internal_url: str,
         secret_key_path: Path,
     ) -> None:
         self.database = database
-        self.service = ChallengeService(database, SecretCipher.load(secret_key_path))
+        self.console_url = os.environ.get("LIMINA_CONSOLE_PUBLIC_URL", "http://127.0.0.1:7433")
+        cipher = SecretCipher.load(secret_key_path)
+        self.notifications = NotificationService(database, cipher)
+
+        def enqueue_notification(session: Any, challenge: Any, episode: Any) -> None:
+            self.notifications.enqueue_attention(
+                session,
+                challenge=challenge,
+                episode=episode,
+                console_url=self.console_url,
+            )
+
+        self.service = ChallengeService(
+            database,
+            cipher,
+            attention_notification_sink=enqueue_notification,
+        )
         self.exporter = MarkdownExporter(self.service)
         self.authenticator = authenticator
         self.supervisor = ProjectSupervisor(
@@ -115,7 +140,61 @@ class RuntimeContext:
             agent_factory=agent_factory,
             poll_interval=poll_interval,
         )
-        self.operations = ProjectOperations(self.service, self.exporter, self.supervisor)
+        self.operations = ProjectOperations(
+            self.service,
+            self.exporter,
+            self.supervisor,
+            notification_service=self.notifications,
+            console_url=self.console_url,
+        )
+        self.event_broker = EventBroker(database)
+        if attention_reconcile_interval <= 0:
+            raise ValueError("attention_reconcile_interval must be positive")
+        self._attention_reconcile_interval = attention_reconcile_interval
+        self._notification_stop = asyncio.Event()
+        self._notification_task: asyncio.Task[None] | None = None
+
+    async def start_background_services(self) -> None:
+        await self.event_broker.start()
+        self._notification_stop.clear()
+        if self._notification_task is None or self._notification_task.done():
+            self._notification_task = asyncio.create_task(
+                self._run_notification_worker(), name="limina-notification-worker"
+            )
+
+    async def stop_background_services(self) -> None:
+        self._notification_stop.set()
+        task = self._notification_task
+        self._notification_task = None
+        if task is not None:
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+        await self.event_broker.stop()
+
+    async def _run_notification_worker(self) -> None:
+        worker_id = f"notification:{os.getpid()}"
+        loop = asyncio.get_running_loop()
+        next_attention_reconcile = 0.0
+        while not self._notification_stop.is_set():
+            if loop.time() >= next_attention_reconcile:
+                try:
+                    await asyncio.to_thread(self.operations.reconcile_attention)
+                except Exception:  # pragma: no cover - process-level resilience
+                    logger.exception("The attention reconciliation cycle failed.")
+                finally:
+                    next_attention_reconcile = loop.time() + self._attention_reconcile_interval
+            try:
+                await asyncio.to_thread(self.notifications.run_once, worker_id=worker_id)
+            except Exception:  # pragma: no cover - process-level resilience
+                logger.exception("The notification worker cycle failed.")
+            try:
+                await asyncio.wait_for(
+                    self._notification_stop.wait(),
+                    timeout=min(1.0, self._attention_reconcile_interval),
+                )
+            except TimeoutError:
+                continue
 
 
 def create_app(
@@ -127,6 +206,7 @@ def create_app(
     workspace_root: Path | None = None,
     agent_factory: AgentFactory | None = None,
     poll_interval: float = 1.0,
+    attention_reconcile_interval: float = 30.0,
     internal_url: str | None = None,
     secret_key_path: Path | None = None,
     mcp_allowed_hosts: list[str] | None = None,
@@ -159,6 +239,7 @@ def create_app(
         workspace_root=resolved_workspace,
         agent_factory=agent_factory,
         poll_interval=poll_interval,
+        attention_reconcile_interval=attention_reconcile_interval,
         internal_url=internal_url or os.environ.get("LIMINA_INTERNAL_URL", "http://127.0.0.1:7433"),
         secret_key_path=resolved_key_path,
     )
@@ -179,11 +260,13 @@ def create_app(
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         async with mcp_server.session_manager.run():
+            await runtime.start_background_services()
             await runtime.supervisor.recover()
             try:
                 yield
             finally:
                 await runtime.supervisor.shutdown()
+                await runtime.stop_background_services()
 
     app = FastAPI(
         title="Limina Project Runtime",
@@ -192,6 +275,9 @@ def create_app(
             "Mission, review, resource, steering, and lifecycle control for Limina-owned runtimes."
         ),
         lifespan=lifespan,
+        openapi_url="/v2/openapi.json",
+        docs_url="/v2/docs",
+        redoc_url=None,
     )
     app.state.runtime = runtime
     app.state.mcp = mcp_server
@@ -283,9 +369,22 @@ def create_app(
         command_dependency=command_dependency,
         public_errors=public_errors,
     )
+    register_console_routes(
+        app,
+        runtime,
+        principal_dependency=principal_dependency,
+        command_dependency=command_dependency,
+        public_errors=public_errors,
+    )
+    register_stream_routes(
+        app,
+        runtime.event_broker,
+        principal_dependency=principal_dependency,
+        public_errors=public_errors,
+    )
 
     @app.post(
-        "/v1/projects",
+        "/v2/projects",
         status_code=201,
         response_model=ProjectResponse,
         responses=public_errors,
@@ -307,7 +406,7 @@ def create_app(
             principal=principal,
         )
 
-    @app.get("/v1/projects", response_model=ProjectPage, responses=public_errors)
+    @app.get("/v2/projects", response_model=ProjectPage, responses=public_errors)
     def list_projects(
         principal: Principal = principal_dependency,
         include_archived: bool = Query(default=False),
@@ -321,30 +420,53 @@ def create_app(
             limit=limit,
         )
 
-    @app.get("/v1/project-templates", response_model=list[KickoffTemplate], responses=public_errors)
+    @app.get("/v2/project-templates", response_model=list[KickoffTemplate], responses=public_errors)
     def list_project_templates(
         _principal: Principal = principal_dependency,
     ) -> list[dict[str, Any]]:
         return runtime.operations.kickoff_templates()
 
-    @app.get("/v1/projects/{slug}", response_model=ProjectResponse, responses=public_errors)
+    @app.get("/v2/projects/{slug}", response_model=ProjectResponse, responses=public_errors)
     def get_project(slug: str, principal: Principal = principal_dependency) -> dict[str, Any]:
         return runtime.operations.get_project(slug, principal=principal)
 
-    @app.patch("/v1/projects/{slug}", response_model=ProjectResponse, responses=public_errors)
+    @app.patch("/v2/projects/{slug}", response_model=ProjectResponse, responses=public_errors)
     def update_project(
         slug: str,
         body: UpdateProjectRequest,
+        command_id: str = command_dependency,
         principal: Principal = principal_dependency,
     ) -> dict[str, Any]:
         return runtime.operations.update_project(
             slug=slug,
-            values=body.model_dump(exclude_unset=True),
+            values=body.model_dump(exclude={"expected_version"}, exclude_unset=True),
+            expected_version=body.expected_version,
+            command_id=command_id,
+            principal=principal,
+        )
+
+    @app.post(
+        "/v2/projects/{slug}/clone",
+        status_code=201,
+        response_model=ProjectResponse,
+        responses=public_errors,
+    )
+    def clone_project(
+        slug: str,
+        body: CloneProjectRequest,
+        command_id: str = command_dependency,
+        principal: Principal = principal_dependency,
+    ) -> dict[str, Any]:
+        return runtime.operations.clone_project(
+            source_slug=slug,
+            slug=body.slug,
+            name=body.name,
+            command_id=command_id,
             principal=principal,
         )
 
     @app.get(
-        "/v1/projects/{slug}/status",
+        "/v2/projects/{slug}/status",
         response_model=ProjectStatusResponse,
         responses=public_errors,
     )
@@ -352,7 +474,7 @@ def create_app(
         return runtime.operations.get_status(slug, principal=principal)
 
     @app.get(
-        "/v1/projects/{slug}/preflight",
+        "/v2/projects/{slug}/preflight",
         response_model=PreflightResponse,
         responses=public_errors,
     )
@@ -360,7 +482,7 @@ def create_app(
         return runtime.operations.preflight(slug, principal=principal)
 
     @app.post(
-        "/v1/projects/{slug}/actions/{action}",
+        "/v2/projects/{slug}/actions/{action}",
         response_model=ProjectResponse,
         responses=public_errors,
     )
@@ -379,7 +501,7 @@ def create_app(
         )
 
     @app.post(
-        "/v1/projects/{slug}/steering",
+        "/v2/projects/{slug}/steering",
         status_code=202,
         response_model=GuidanceReceipt,
         responses=public_errors,
@@ -399,7 +521,7 @@ def create_app(
             principal=principal,
         )
 
-    @app.get("/v1/projects/{slug}/guidance", response_model=GuidancePage, responses=public_errors)
+    @app.get("/v2/projects/{slug}/guidance", response_model=GuidancePage, responses=public_errors)
     def guidance_history(
         slug: str,
         principal: Principal = principal_dependency,
@@ -415,7 +537,7 @@ def create_app(
             principal=principal,
         )
 
-    @app.get("/v1/projects/{slug}/review", response_model=ReviewResponse, responses=public_errors)
+    @app.get("/v2/projects/{slug}/review", response_model=ReviewResponse, responses=public_errors)
     def review_project(
         slug: str,
         principal: Principal = principal_dependency,
@@ -424,7 +546,7 @@ def create_app(
     ) -> dict[str, Any]:
         return runtime.operations.review(slug, principal=principal, cursor=cursor, limit=limit)
 
-    @app.get("/v1/projects/{slug}/knowledge", response_model=KnowledgePage, responses=public_errors)
+    @app.get("/v2/projects/{slug}/knowledge", response_model=KnowledgePage, responses=public_errors)
     def query_knowledge(
         slug: str,
         principal: Principal = principal_dependency,
@@ -447,7 +569,7 @@ def create_app(
         )
 
     @app.get(
-        "/v1/projects/{slug}/knowledge/graph",
+        "/v2/projects/{slug}/knowledge/graph",
         response_model=KnowledgeGraphResponse,
         responses=public_errors,
     )
@@ -455,7 +577,7 @@ def create_app(
         return runtime.operations.knowledge_graph(slug, principal=principal)
 
     @app.post(
-        "/v1/projects/{slug}/knowledge/relations",
+        "/v2/projects/{slug}/knowledge/relations",
         status_code=201,
         response_model=RelationResponse,
         responses=public_errors,
@@ -475,7 +597,7 @@ def create_app(
         )
 
     @app.delete(
-        "/v1/projects/{slug}/knowledge/relations/{relation_id}",
+        "/v2/projects/{slug}/knowledge/relations/{relation_id}",
         response_model=RelationResponse,
         responses=public_errors,
     )
@@ -485,7 +607,7 @@ def create_app(
         return runtime.operations.delete_relation(slug, relation_id, principal=principal)
 
     @app.get(
-        "/v1/projects/{slug}/knowledge/views",
+        "/v2/projects/{slug}/knowledge/views",
         response_model=list[SavedViewResponse],
         responses=public_errors,
     )
@@ -493,7 +615,7 @@ def create_app(
         return runtime.operations.saved_views(slug, principal=principal)
 
     @app.put(
-        "/v1/projects/{slug}/knowledge/views",
+        "/v2/projects/{slug}/knowledge/views",
         response_model=SavedViewResponse,
         responses=public_errors,
     )
@@ -507,7 +629,7 @@ def create_app(
         )
 
     @app.delete(
-        "/v1/projects/{slug}/knowledge/views/{view_id}",
+        "/v2/projects/{slug}/knowledge/views/{view_id}",
         response_model=SavedViewResponse,
         responses=public_errors,
     )
@@ -517,7 +639,7 @@ def create_app(
         return runtime.operations.delete_view(slug, view_id, principal=principal)
 
     @app.get(
-        "/v1/projects/{slug}/knowledge/{artifact_id}",
+        "/v2/projects/{slug}/knowledge/{artifact_id}",
         response_model=ArtifactResponse,
         responses=public_errors,
     )
@@ -527,7 +649,7 @@ def create_app(
         return runtime.operations.get_knowledge(slug, artifact_id, principal=principal)
 
     @app.get(
-        "/v1/projects/{slug}/knowledge/{artifact_id}/revisions",
+        "/v2/projects/{slug}/knowledge/{artifact_id}/revisions",
         response_model=list[RevisionResponse],
         responses=public_errors,
     )
@@ -537,7 +659,7 @@ def create_app(
         return runtime.operations.revisions(slug, artifact_id, principal=principal)
 
     @app.get(
-        "/v1/projects/{slug}/knowledge/{artifact_id}/comments",
+        "/v2/projects/{slug}/knowledge/{artifact_id}/comments",
         response_model=list[CommentResponse],
         responses=public_errors,
     )
@@ -547,7 +669,7 @@ def create_app(
         return runtime.operations.comments(slug, artifact_id, principal=principal)
 
     @app.post(
-        "/v1/projects/{slug}/knowledge/{artifact_id}/comments",
+        "/v2/projects/{slug}/knowledge/{artifact_id}/comments",
         status_code=201,
         response_model=CommentResponse,
         responses=public_errors,
@@ -568,7 +690,7 @@ def create_app(
         )
 
     @app.get(
-        "/v1/projects/{slug}/knowledge/{artifact_id}/tags",
+        "/v2/projects/{slug}/knowledge/{artifact_id}/tags",
         response_model=TagResponse,
         responses=public_errors,
     )
@@ -578,7 +700,7 @@ def create_app(
         return {"tags": runtime.operations.tags(slug, artifact_id, principal=principal)}
 
     @app.put(
-        "/v1/projects/{slug}/knowledge/{artifact_id}/tags/{tag}",
+        "/v2/projects/{slug}/knowledge/{artifact_id}/tags/{tag}",
         response_model=TagResponse,
         responses=public_errors,
     )
@@ -591,7 +713,7 @@ def create_app(
         return {"tags": runtime.operations.add_tag(slug, artifact_id, tag, principal=principal)}
 
     @app.delete(
-        "/v1/projects/{slug}/knowledge/{artifact_id}/tags/{tag}",
+        "/v2/projects/{slug}/knowledge/{artifact_id}/tags/{tag}",
         response_model=TagResponse,
         responses=public_errors,
     )
@@ -603,7 +725,7 @@ def create_app(
     ) -> dict[str, Any]:
         return {"tags": runtime.operations.remove_tag(slug, artifact_id, tag, principal=principal)}
 
-    @app.get("/v1/projects/{slug}/events", response_model=EventPage, responses=public_errors)
+    @app.get("/v2/projects/{slug}/events", response_model=EventPage, responses=public_errors)
     def project_events(
         slug: str,
         principal: Principal = principal_dependency,
@@ -613,13 +735,13 @@ def create_app(
         return runtime.operations.activity(slug, after=after, limit=limit, principal=principal)
 
     @app.get(
-        "/v1/projects/{slug}/snapshot", response_model=SnapshotResponse, responses=public_errors
+        "/v2/projects/{slug}/snapshot", response_model=SnapshotResponse, responses=public_errors
     )
     def snapshot(slug: str, principal: Principal = principal_dependency) -> dict[str, Any]:
         return runtime.operations.snapshot(slug, principal=principal)
 
     @app.put(
-        "/v1/projects/{slug}/resources/variables/{name}",
+        "/v2/projects/{slug}/resources/variables/{name}",
         response_model=ResourceResponse,
         response_model_exclude_none=True,
         responses=public_errors,
@@ -641,7 +763,7 @@ def create_app(
         )
 
     @app.put(
-        "/v1/projects/{slug}/resources/secrets/{name}",
+        "/v2/projects/{slug}/resources/secrets/{name}",
         response_model=ResourceResponse,
         response_model_exclude_none=True,
         responses=public_errors,
@@ -663,7 +785,7 @@ def create_app(
         )
 
     @app.get(
-        "/v1/projects/{slug}/resources",
+        "/v2/projects/{slug}/resources",
         response_model=list[ResourceResponse],
         response_model_exclude_none=True,
         responses=public_errors,
@@ -674,7 +796,7 @@ def create_app(
         return runtime.operations.list_resources(slug, principal=principal)
 
     @app.delete(
-        "/v1/projects/{slug}/resources/{name}",
+        "/v2/projects/{slug}/resources/{name}",
         response_model=ResourceResponse,
         response_model_exclude_none=True,
         responses=public_errors,
@@ -694,7 +816,7 @@ def create_app(
         )
 
     @app.get(
-        "/v1/projects/{slug}/members",
+        "/v2/projects/{slug}/members",
         response_model=list[MemberResponse],
         responses=public_errors,
     )
@@ -704,7 +826,7 @@ def create_app(
         return runtime.operations.members(slug, principal=principal)
 
     @app.put(
-        "/v1/projects/{slug}/members",
+        "/v2/projects/{slug}/members",
         response_model=MemberResponse,
         responses=public_errors,
     )
@@ -723,7 +845,7 @@ def create_app(
         )
 
     @app.delete(
-        "/v1/projects/{slug}/members",
+        "/v2/projects/{slug}/members",
         response_model=MemberResponse,
         responses=public_errors,
     )
@@ -735,7 +857,7 @@ def create_app(
         return runtime.operations.remove_member(slug, subject, principal=principal)
 
     @app.post(
-        "/v1/projects/{slug}/live-ticket",
+        "/v2/projects/{slug}/live-ticket",
         response_model=LiveTicketResponse,
         responses=public_errors,
     )
@@ -743,7 +865,7 @@ def create_app(
         return runtime.operations.issue_live_ticket(slug, principal=principal)
 
     @app.get(
-        "/v1/projects/{slug}/sources",
+        "/v2/projects/{slug}/sources",
         response_model=list[SourceResponse],
         responses=public_errors,
     )
@@ -753,7 +875,7 @@ def create_app(
         return runtime.operations.sources(slug, principal=principal)
 
     @app.put(
-        "/v1/projects/{slug}/sources",
+        "/v2/projects/{slug}/sources",
         response_model=SourceResponse,
         responses=public_errors,
     )
@@ -773,7 +895,7 @@ def create_app(
         )
 
     @app.post(
-        "/v1/projects/{slug}/sources/upload",
+        "/v2/projects/{slug}/sources/upload",
         status_code=201,
         response_model=SourceResponse,
         responses=public_errors,
@@ -826,7 +948,7 @@ def create_app(
         )
 
     @app.delete(
-        "/v1/projects/{slug}/sources/{source_id}",
+        "/v2/projects/{slug}/sources/{source_id}",
         response_model=SourceResponse,
         responses=public_errors,
     )
@@ -835,7 +957,7 @@ def create_app(
     ) -> dict[str, Any]:
         return runtime.operations.remove_source(slug, source_id, principal=principal)
 
-    @app.get("/v1/projects/{slug}/runs", response_model=RuntimeRunPage, responses=public_errors)
+    @app.get("/v2/projects/{slug}/runs", response_model=RuntimeRunPage, responses=public_errors)
     def list_runs(
         slug: str,
         principal: Principal = principal_dependency,
@@ -848,7 +970,7 @@ def create_app(
         )
 
     @app.get(
-        "/v1/projects/{slug}/runs/{run_id}",
+        "/v2/projects/{slug}/runs/{run_id}",
         response_model=RuntimeRunDetail,
         responses=public_errors,
     )
@@ -858,7 +980,7 @@ def create_app(
         return runtime.operations.run(slug, run_id, principal=principal)
 
     @app.get(
-        "/v1/projects/{slug}/analytics",
+        "/v2/projects/{slug}/analytics",
         response_model=AnalyticsResponse,
         responses=public_errors,
     )
@@ -869,11 +991,11 @@ def create_app(
     ) -> dict[str, Any]:
         return runtime.operations.analytics(slug, days=days, principal=principal)
 
-    @app.websocket("/v1/projects/{slug}/live")
+    @app.websocket("/v2/projects/{slug}/live")
     async def project_live(websocket: WebSocket, slug: str) -> None:
         protocols = list(websocket.scope.get("subprotocols", []))
-        if "limina.v1" not in protocols:
-            await websocket.close(code=4400, reason="The limina.v1 subprotocol is required.")
+        if "limina.v2" not in protocols:
+            await websocket.close(code=4400, reason="The limina.v2 subprotocol is required.")
             return
         ticket_protocols = [
             item.removeprefix("limina.ticket.")
@@ -884,6 +1006,10 @@ def create_app(
             await websocket.close(code=4400, reason="Only one live ticket may be supplied.")
             return
         ticket = ticket_protocols[0] if ticket_protocols else None
+        console_origin = os.environ.get("LIMINA_CONSOLE_PUBLIC_URL", "").strip().rstrip("/")
+        if ticket and console_origin and websocket.headers.get("origin") != console_origin:
+            await websocket.close(code=4403, reason="The live attachment origin is not allowed.")
+            return
         auth_key = websocket.client.host if websocket.client else "unknown"
         try:
             auth_limiter.check(auth_key)
@@ -900,7 +1026,7 @@ def create_app(
                     actor_hint=websocket.headers.get("x-limina-actor"),
                 )
                 role = runtime.operations.collaboration.require_role(slug, principal, "VIEWER")
-            initial = public_status(runtime.service.status(slug))
+            initial = public_status(runtime.service.status(slug), role=role)
         except LiminaError as exc:
             if exc.http_status == 401 or ticket:
                 auth_limiter.failure(auth_key)
@@ -909,15 +1035,20 @@ def create_app(
             )
             return
         auth_limiter.success(auth_key)
-        await websocket.accept(subprotocol="limina.v1")
+        await websocket.accept(subprotocol="limina.v2")
         cursor_text = websocket.query_params.get("after", "0")
         try:
             cursor = max(0, int(cursor_text))
         except ValueError:
             cursor = 0
         await websocket.send_json({"type": "snapshot", "value": initial})
+        event_loop = asyncio.get_running_loop()
+        last_role_check = event_loop.time()
         try:
             while True:
+                if event_loop.time() - last_role_check >= 5.0:
+                    role = runtime.operations.collaboration.require_role(slug, principal, "VIEWER")
+                    last_role_check = event_loop.time()
                 raw_events = runtime.service.events(slug, after=cursor, limit=200)
                 for raw_event in raw_events:
                     cursor = raw_event["sequence"]
@@ -929,6 +1060,8 @@ def create_app(
                 except TimeoutError:
                     continue
                 message_type = str(message.get("type", "steer")).lower()
+                role = runtime.operations.collaboration.require_role(slug, principal, "VIEWER")
+                last_role_check = event_loop.time()
                 if role == "VIEWER":
                     raise InvariantError("Viewers can observe live work but cannot steer it.")
                 if message_type == "steer":

@@ -37,7 +37,7 @@ class CloudMigrationTests(unittest.TestCase):
                 self.assertIn("alembic_version", tables)
                 with engine.connect() as connection:
                     revision = connection.scalar(text("SELECT version_num FROM alembic_version"))
-                self.assertEqual(revision, "1f6a2c8d9e10")
+                self.assertEqual(revision, "console_notifications")
                 self.assertTrue(
                     {
                         "project_members",
@@ -48,6 +48,14 @@ class CloudMigrationTests(unittest.TestCase):
                         "artifact_tags",
                         "saved_knowledge_views",
                         "runtime_runs",
+                        "attention_requests",
+                        "attention_episodes",
+                        "attention_dispositions",
+                        "artifact_reviews",
+                        "notification_channels",
+                        "notification_rules",
+                        "notification_outbox",
+                        "notification_deliveries",
                     }
                     <= tables
                 )
@@ -67,6 +75,32 @@ class CloudMigrationTests(unittest.TestCase):
                     {"resource_type", "value", "secret_ciphertext", "updated_at"} <= columns
                 )
                 self.assertTrue({"uri", "kind", "credential_env"}.isdisjoint(columns))
+
+                attention_indexes = {
+                    item["name"]: tuple(item["column_names"])
+                    for item in inspect(engine).get_indexes("attention_episodes")
+                }
+                self.assertEqual(
+                    attention_indexes["ix_attention_episode_queue"],
+                    ("status", "severity_rank", "opened_at", "id"),
+                )
+                review_foreign_keys = inspect(engine).get_foreign_keys("artifact_reviews")
+                self.assertTrue(
+                    any(
+                        tuple(item["constrained_columns"]) == ("artifact_uid", "artifact_version")
+                        and item["referred_table"] == "artifact_revisions"
+                        and tuple(item["referred_columns"]) == ("artifact_uid", "version")
+                        for item in review_foreign_keys
+                    )
+                )
+                outbox_indexes = {
+                    item["name"]: tuple(item["column_names"])
+                    for item in inspect(engine).get_indexes("notification_outbox")
+                }
+                self.assertEqual(
+                    outbox_indexes["ix_notification_outbox_claim"],
+                    ("status", "next_attempt_at", "created_at", "id"),
+                )
             finally:
                 engine.dispose()
 

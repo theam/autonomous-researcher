@@ -17,11 +17,13 @@ from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from .attention_service import expire_open_requests, record_checkpoint_request
 from .database import Database
 from .errors import ConflictError, InvariantError, LeaseConflictError, NotFoundError
 from .models import (
     Artifact,
     ArtifactRevision,
+    AttentionEpisode,
     Challenge,
     CommandReceipt,
     CoordinatorState,
@@ -38,6 +40,7 @@ from .runtime_environment import is_reserved_resource_name
 from .vault import SecretCipher
 
 Result = TypeVar("Result", bound=dict[str, Any])
+AttentionNotificationSink = Callable[[Session, Challenge, AttentionEpisode], None]
 ARTIFACT_ID_RE = re.compile(r"^(H|E|F|L|CR|SR)\d{3,}$")
 SLUG_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -76,9 +79,16 @@ def _aware(value: datetime) -> datetime:
 
 
 class ChallengeService(ProjectServiceMixin, ResearchServiceMixin):
-    def __init__(self, database: Database, secret_cipher: SecretCipher | None = None) -> None:
+    def __init__(
+        self,
+        database: Database,
+        secret_cipher: SecretCipher | None = None,
+        *,
+        attention_notification_sink: AttentionNotificationSink | None = None,
+    ) -> None:
         self.database = database
         self.secret_cipher = secret_cipher
+        self.attention_notification_sink = attention_notification_sink
 
     def get_challenge(self, slug: str) -> dict[str, Any]:
         with self.database.session() as session:
@@ -216,6 +226,8 @@ class ChallengeService(ProjectServiceMixin, ResearchServiceMixin):
         command_id: str,
         acknowledge_message_ids: list[str] | None = None,
         wake_at: datetime | None = None,
+        attention_request: dict[str, Any] | None = None,
+        run_id: str | None = None,
     ) -> dict[str, Any]:
         self._require_text("current objective", current_objective)
         self._require_text("next step", next_step)
@@ -232,6 +244,10 @@ class ChallengeService(ProjectServiceMixin, ResearchServiceMixin):
             raise InvariantError(
                 "Runtime status must be CREATED, RUNNING, WAITING, PAUSED, STOPPED, "
                 "COMPLETE, or FAILED."
+            )
+        if attention_request is not None and status != "WAITING":
+            raise InvariantError(
+                "A runtime attention request requires a WAITING checkpoint status."
             )
 
         def operation(session: Session) -> dict[str, Any]:
@@ -288,7 +304,7 @@ class ChallengeService(ProjectServiceMixin, ResearchServiceMixin):
                 message.acknowledged_at = acknowledged_at
             session.flush()
             coordinator = session.get(CoordinatorState, challenge.id)
-            self._record_event(
+            checkpoint_event = self._record_event(
                 session,
                 challenge=challenge,
                 event_type="coordinator.checkpointed",
@@ -304,6 +320,35 @@ class ChallengeService(ProjectServiceMixin, ResearchServiceMixin):
                     "wake_at": _iso(wake_at),
                 },
             )
+            session.flush()
+            if attention_request is not None:
+                request_payload = dict(attention_request)
+                if run_id is not None:
+                    request_payload["run_id"] = run_id
+                attention_ids = record_checkpoint_request(
+                    session,
+                    challenge=challenge,
+                    checkpoint_sequence=checkpoint_event.sequence,
+                    request=request_payload,
+                    actor=actor,
+                )
+                checkpoint_event.payload = {
+                    **checkpoint_event.payload,
+                    "attention_request_id": attention_ids["request_id"],
+                    "attention_episode_id": attention_ids["episode_id"],
+                }
+                if self.attention_notification_sink is not None:
+                    episode = session.get(AttentionEpisode, attention_ids["episode_id"])
+                    if episode is None:  # pragma: no cover - same-transaction invariant
+                        raise ConflictError("The attention episode could not be loaded.")
+                    self.attention_notification_sink(session, challenge, episode)
+            elif status in {"COMPLETE", "FAILED"}:
+                expire_open_requests(
+                    session,
+                    challenge_id=challenge.id,
+                    actor=actor,
+                    reason=f"coordinator_{status.lower()}",
+                )
             return self._coordinator_dict(coordinator)
 
         return self._execute(command_id, "coordinator.checkpoint", actor, operation)

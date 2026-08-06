@@ -1,5 +1,9 @@
 # Limina — Enterprise Evaluation Report
 
+> Historical evidence note (2026-08-06): the `/v1` references below are preserved
+> exactly as evaluated on 2026-07-15. Limina Console later replaced the public API with
+> `/v2`; the current runtime does not mount compatibility routes.
+
 - **Evaluator:** Senior AI engineer, enterprise platform team (actor: `claude-enterprise-evaluator`)
 - **Method:** Autonomous Claude Code session; 29-minute key-bearing timebox; evidence-first (command output + `file:line`)
 - **Repository revision:** `6a80aa67efd63bb435f83cc9db8ae57cb372c9f5` (working tree clean at start except untracked `EVALUATION_BRIEF.md`)

@@ -79,6 +79,32 @@ The one container applies migrations and starts the API and supervisor. The `lim
 volume preserves the database, project workspaces, private engine continuation data, and the local
 secret-encryption key.
 
+### Limina Console
+
+The attention-first web Console runs with the PostgreSQL topology in `compose.cloud.yaml`. Its
+TAM-50 package is read from GitHub Packages, so the first build needs a token with package-read
+access. Local Console authentication is deliberately explicit and loopback-only:
+
+```bash
+export NODE_AUTH_TOKEN="$(gh auth token)"
+export LIMINA_UI_AUTH_MODE=local
+export LIMINA_ALLOW_LOCAL_AUTH=1
+export LIMINA_CONSOLE_DEV_AUTH=1
+export LIMINA_DEV_JWT_SECRET="$(openssl rand -hex 32)"
+docker compose -f compose.cloud.yaml up --build
+```
+
+Open <http://127.0.0.1:7433>. This local identity can create projects and becomes Owner of projects
+it creates, but it is not an implicit instance administrator and cannot bypass project membership.
+Do not expose local-auth mode on a network interface.
+
+For a team deployment, set `LIMINA_UI_AUTH_MODE=workos` instead; leave the two local-auth flags
+unset and provide `WORKOS_API_KEY`, `WORKOS_CLIENT_ID`, `WORKOS_COOKIE_PASSWORD`,
+`NEXT_PUBLIC_WORKOS_REDIRECT_URI`, and `LIMINA_WORKOS_ORGANIZATION_ID`. The dedicated WorkOS client
+must grant `limina:access`; `limina:project-create` and `limina:instance-admin` are independent
+coarse permissions. Project access still comes only from durable Owner, Editor, or Viewer
+membership. See [the Console operator and deployment guide](docs/limina-console.md).
+
 In another terminal:
 
 ```bash
@@ -157,13 +183,13 @@ The same server also exposes a versioned REST API and a Streamable HTTP MCP serv
 separate runtimes: CLI, REST, WebSocket, and MCP all call the same project operations and observe
 the same database, event sequence, managed execution loop, and knowledge graph.
 
-Use REST for services and automation. The typed OpenAPI document is available at `/openapi.json`,
-with an interactive explorer at `/docs`. Every project request uses a bearer token. In local mode,
+Use REST for services and automation. The typed OpenAPI document is available at `/v2/openapi.json`,
+with an interactive explorer at `/v2/docs`. Every project request uses a bearer token. In local mode,
 `X-Limina-Actor` supplies attribution; in OIDC mode Limina derives identity from signed claims and
 ignores that header. Mutations carry an idempotency key for safe retries:
 
 ```bash
-curl -X POST http://127.0.0.1:7433/v1/projects \
+curl -X POST http://127.0.0.1:7433/v2/projects \
   -H "Authorization: Bearer $LIMINA_API_TOKEN" \
   -H "X-Limina-Actor: $LIMINA_ACTOR" \
   -H "Idempotency-Key: $(uuidgen)" \
@@ -177,7 +203,7 @@ curl -X POST http://127.0.0.1:7433/v1/projects \
     "runtime": "codex"
   }'
 
-curl http://127.0.0.1:7433/v1/projects/retrieval-codex/review \
+curl http://127.0.0.1:7433/v2/projects/retrieval-codex/review \
   -H "Authorization: Bearer $LIMINA_API_TOKEN"
 ```
 
@@ -459,6 +485,11 @@ docker compose up --build
 Use PostgreSQL when you need managed database operations or plan for multiple runtime replicas:
 
 ```bash
+LIMINA_UI_AUTH_MODE=local \
+LIMINA_ALLOW_LOCAL_AUTH=1 \
+LIMINA_CONSOLE_DEV_AUTH=1 \
+LIMINA_DEV_JWT_SECRET="$(openssl rand -hex 32)" \
+NODE_AUTH_TOKEN="$(gh auth token)" \
 docker compose -f compose.cloud.yaml up --build
 ```
 

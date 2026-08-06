@@ -1,5 +1,9 @@
 # Managed runtime verification dossier
 
+> Historical evidence note (2026-08-06): this dossier preserves the public `/v1`
+> responses observed during its original acceptance run. Limina Console later replaced
+> that surface with `/v2`; no public `/v1` compatibility routes remain.
+
 ## Acceptance claims
 
 | Claim | Mechanism | Automated evidence |
@@ -42,6 +46,7 @@ python3 scripts/kb_validate.py
 OPENAI_API_KEY=test ANTHROPIC_API_KEY=test LIMINA_API_TOKEN=acceptance-test-token \
   docker compose config
 OPENAI_API_KEY=test ANTHROPIC_API_KEY=test LIMINA_API_TOKEN=acceptance-test-token \
+  LIMINA_UI_AUTH_MODE=local LIMINA_ALLOW_LOCAL_AUTH=1 \
   docker compose -f compose.cloud.yaml config
 ```
 

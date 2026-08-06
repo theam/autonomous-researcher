@@ -12,6 +12,7 @@ import uvicorn
 from rich.console import Console
 
 from .api import create_app
+from .auth import authenticator_from_environment
 from .engines import runtime_engine_label
 
 
@@ -52,8 +53,12 @@ def register_server_commands(
         ] = None,
     ) -> None:
         """Run a complete Limina instance, including all managed project runtimes."""
-        oidc_configured = bool(
-            os.environ.get("LIMINA_OIDC_ISSUER") and os.environ.get("LIMINA_OIDC_AUDIENCE")
+        remote_auth_configured = bool(
+            (os.environ.get("LIMINA_OIDC_ISSUER") and os.environ.get("LIMINA_OIDC_AUDIENCE"))
+            or (
+                os.environ.get("LIMINA_WORKOS_CLIENT_ID")
+                and os.environ.get("LIMINA_WORKOS_ORGANIZATION_ID")
+            )
         )
         insecure_local = os.environ.get("LIMINA_ALLOW_INSECURE_NO_AUTH", "").lower() in {
             "1",
@@ -63,17 +68,21 @@ def register_server_commands(
         if (
             host not in {"127.0.0.1", "localhost", "::1"}
             and not (token or admin_token)
-            and not oidc_configured
+            and not remote_auth_configured
             and not insecure_local
         ):
             raise typer.BadParameter(
-                "a shared token or OIDC configuration is required for a non-local bind"
+                "a shared token, OIDC, or WorkOS configuration is required for a non-local bind"
             )
+        authenticator = authenticator_from_environment(
+            local_token=token,
+            local_admin_token=admin_token,
+            bind_host=host,
+        )
         uvicorn.run(
             create_app(
                 database_url=database_url,
-                token=token,
-                admin_token=admin_token,
+                authenticator=authenticator,
                 workspace_root=workspace_root,
                 internal_url=f"http://127.0.0.1:{port}",
             ),

@@ -38,6 +38,14 @@ Thumbs.db
 .env
 *.log
 
+# Console web app
+node_modules/
+.next/
+playwright-report/
+test-results/
+*.tsbuildinfo
+artifacts/
+
 # Notion sync state (contains Notion page IDs, session-specific)
 kb/.notion-sync.json
 

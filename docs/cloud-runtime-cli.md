@@ -48,11 +48,23 @@ export LIMINA_ADMIN_API_TOKEN=another-local-secret
 uv run limina serve
 ```
 
-For PostgreSQL:
+For the PostgreSQL-backed Console stack:
 
 ```bash
+LIMINA_UI_AUTH_MODE=local \
+LIMINA_ALLOW_LOCAL_AUTH=1 \
+LIMINA_CONSOLE_DEV_AUTH=1 \
+LIMINA_DEV_JWT_SECRET="$(openssl rand -hex 32)" \
+NODE_AUTH_TOKEN="$(gh auth token)" \
 docker compose -f compose.cloud.yaml up --build
 ```
+
+This topology starts Limina Console on port 7433 and keeps the runtime API behind its
+server-side BFF, except for the authenticated live stream. It is not the standalone CLI
+topology: do not point `limina` at the Console origin. For direct CLI use, run `limina serve`
+as shown above (set `LIMINA_DATABASE_URL` when PostgreSQL is required). Local Console auth is
+an explicit loopback-only development mode; use the WorkOS configuration in
+`docs/limina-console.md` for team access.
 
 Project commands use `LIMINA_URL` (default `http://127.0.0.1:7433`), `LIMINA_API_TOKEN`, and the
 optional attribution identity `LIMINA_ACTOR`. Runtime administration uses

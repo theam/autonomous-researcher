@@ -152,29 +152,29 @@ class HttpRuntimeClient:
         return self._request("GET", "/healthz")
 
     def codex_auth_status(self) -> dict[str, Any]:
-        return self._request("GET", "/v1/runtime/engines/codex/auth")
+        return self._request("GET", "/v2/runtime/engines/codex/auth")
 
     def codex_login(self, method: str, *, command_id: str) -> dict[str, Any]:
         return self._request(
             "POST",
-            "/v1/runtime/engines/codex/auth/login",
+            "/v2/runtime/engines/codex/auth/login",
             {"method": method},
             command_id=command_id,
         )
 
     def codex_login_attempt(self, login_id: str) -> dict[str, Any]:
-        return self._request("GET", f"/v1/runtime/engines/codex/auth/login/{login_id}")
+        return self._request("GET", f"/v2/runtime/engines/codex/auth/login/{login_id}")
 
     def cancel_codex_login(self, login_id: str) -> dict[str, Any]:
-        return self._request("DELETE", f"/v1/runtime/engines/codex/auth/login/{login_id}")
+        return self._request("DELETE", f"/v2/runtime/engines/codex/auth/login/{login_id}")
 
     def codex_logout(self) -> dict[str, Any]:
-        return self._request("DELETE", "/v1/runtime/engines/codex/auth")
+        return self._request("DELETE", "/v2/runtime/engines/codex/auth")
 
     def create_project(
         self, payload: dict[str, Any], *, actor: str, command_id: str
     ) -> dict[str, Any]:
-        return self._request("POST", "/v1/projects", payload, actor, command_id)
+        return self._request("POST", "/v2/projects", payload, actor, command_id)
 
     def projects(self, *, include_archived: bool = False) -> list[dict[str, Any]]:
         items: list[dict[str, Any]] = []
@@ -186,37 +186,37 @@ class HttpRuntimeClient:
             }
             if cursor:
                 params["cursor"] = cursor
-            page = self._request("GET", "/v1/projects", params=params)
+            page = self._request("GET", "/v2/projects", params=params)
             items.extend(page["items"])
             cursor = page.get("next_cursor")
             if not cursor:
                 return items
 
     def project(self, slug: str) -> dict[str, Any]:
-        return self._request("GET", f"/v1/projects/{slug}")
+        return self._request("GET", f"/v2/projects/{slug}")
 
     def project_status(self, slug: str) -> dict[str, Any]:
-        return self._request("GET", f"/v1/projects/{slug}/status")
+        return self._request("GET", f"/v2/projects/{slug}/status")
 
     def project_action(
         self, slug: str, action: str, *, actor: str, command_id: str
     ) -> dict[str, Any]:
-        return self._request("POST", f"/v1/projects/{slug}/actions/{action}", {}, actor, command_id)
+        return self._request("POST", f"/v2/projects/{slug}/actions/{action}", {}, actor, command_id)
 
     def steer_project(
         self, slug: str, payload: dict[str, Any], *, actor: str, command_id: str
     ) -> dict[str, Any]:
-        return self._request("POST", f"/v1/projects/{slug}/steering", payload, actor, command_id)
+        return self._request("POST", f"/v2/projects/{slug}/steering", payload, actor, command_id)
 
     def review(self, slug: str) -> dict[str, Any]:
-        return self._request("GET", f"/v1/projects/{slug}/review")
+        return self._request("GET", f"/v2/projects/{slug}/review")
 
     def knowledge(self, slug: str, artifact_id: str) -> dict[str, Any]:
-        return self._request("GET", f"/v1/projects/{slug}/knowledge/{artifact_id}")
+        return self._request("GET", f"/v2/projects/{slug}/knowledge/{artifact_id}")
 
     def activity(self, slug: str, *, after: int, limit: int) -> dict[str, Any]:
         return self._request(
-            "GET", f"/v1/projects/{slug}/events", params={"after": after, "limit": limit}
+            "GET", f"/v2/projects/{slug}/events", params={"after": after, "limit": limit}
         )
 
     def set_variable(
@@ -224,7 +224,7 @@ class HttpRuntimeClient:
     ) -> dict[str, Any]:
         return self._request(
             "PUT",
-            f"/v1/projects/{slug}/resources/variables/{name}",
+            f"/v2/projects/{slug}/resources/variables/{name}",
             {"value": value},
             actor,
             command_id,
@@ -235,20 +235,20 @@ class HttpRuntimeClient:
     ) -> dict[str, Any]:
         return self._request(
             "PUT",
-            f"/v1/projects/{slug}/resources/secrets/{name}",
+            f"/v2/projects/{slug}/resources/secrets/{name}",
             {"value": value},
             actor,
             command_id,
         )
 
     def resources(self, slug: str) -> list[dict[str, Any]]:
-        return self._request("GET", f"/v1/projects/{slug}/resources")
+        return self._request("GET", f"/v2/projects/{slug}/resources")
 
     def remove_resource(
         self, slug: str, name: str, *, actor: str, command_id: str
     ) -> dict[str, Any]:
         return self._request(
-            "DELETE", f"/v1/projects/{slug}/resources/{name}", None, actor, command_id
+            "DELETE", f"/v2/projects/{slug}/resources/{name}", None, actor, command_id
         )
 
     def status(self, slug: str) -> dict[str, Any]:
@@ -327,7 +327,7 @@ class HttpRuntimeClient:
         )
 
     def snapshot(self, slug: str) -> dict[str, str]:
-        result = self._request("GET", f"/v1/projects/{slug}/snapshot")
+        result = self._request("GET", f"/v2/projects/{slug}/snapshot")
         return result["files"]
 
     def close(self) -> None:

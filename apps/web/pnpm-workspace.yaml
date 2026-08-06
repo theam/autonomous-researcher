@@ -1,0 +1,6 @@
+allowBuilds:
+  '@carbon/icon-helpers': true
+  '@carbon/icons-react': true
+  esbuild: true
+  sharp: true
+  unrs-resolver: true

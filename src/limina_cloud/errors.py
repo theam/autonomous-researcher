@@ -28,6 +28,17 @@ class ConflictError(LiminaError):
         super().__init__(message, "version_conflict", details, 4, 409)
 
 
+class AttentionActionNotAllowedError(LiminaError):
+    def __init__(self, *, action: str, allowed_actions: list[str]) -> None:
+        super().__init__(
+            "The action is not available for this attention item.",
+            "ATTENTION_ACTION_NOT_ALLOWED",
+            {"action": action, "allowed_actions": allowed_actions},
+            4,
+            409,
+        )
+
+
 class InvariantError(LiminaError):
     def __init__(self, message: str, **details: Any) -> None:
         super().__init__(message, "invariant_violation", details, 5, 422)

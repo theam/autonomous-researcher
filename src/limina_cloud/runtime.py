@@ -35,8 +35,57 @@ TURN_OUTPUT_SCHEMA: dict[str, Any] = {
         "current_objective": {"type": "string"},
         "next_step": {"type": "string"},
         "blocker": {"type": "string"},
+        "attention_request": {
+            "anyOf": [
+                {"type": "null"},
+                {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "kind": {
+                            "type": "string",
+                            "enum": ["QUESTION", "APPROVAL", "REVIEW", "BLOCKER"],
+                        },
+                        "response_mode": {
+                            "type": "string",
+                            "enum": ["TEXT", "CHOICE", "CONFIRMATION", "ARTIFACT_REVIEW"],
+                        },
+                        "priority": {
+                            "type": "string",
+                            "enum": ["CRITICAL", "HIGH", "MEDIUM", "LOW"],
+                        },
+                        "title": {"type": "string"},
+                        "body": {"type": "string"},
+                        "choices": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "maxItems": 12,
+                        },
+                        "artifact_id": {"type": ["string", "null"]},
+                        "artifact_version": {"type": ["integer", "null"], "minimum": 1},
+                    },
+                    "required": [
+                        "kind",
+                        "response_mode",
+                        "priority",
+                        "title",
+                        "body",
+                        "choices",
+                        "artifact_id",
+                        "artifact_version",
+                    ],
+                },
+            ]
+        },
     },
-    "required": ["summary", "status", "current_objective", "next_step", "blocker"],
+    "required": [
+        "summary",
+        "status",
+        "current_objective",
+        "next_step",
+        "blocker",
+        "attention_request",
+    ],
 }
 
 
@@ -65,12 +114,25 @@ def _claude_settings_path(config_dir: Path) -> Path:
 
 
 @dataclass(frozen=True)
+class RuntimeAttentionRequest:
+    kind: str
+    response_mode: str
+    priority: str
+    title: str
+    body: str
+    choices: tuple[str, ...] = ()
+    artifact_id: str | None = None
+    artifact_version: int | None = None
+
+
+@dataclass(frozen=True)
 class RuntimeDecision:
     summary: str
     status: str
     current_objective: str
     next_step: str
     blocker: str
+    attention_request: RuntimeAttentionRequest | None = None
 
 
 @dataclass(frozen=True)
@@ -91,12 +153,34 @@ class RuntimeEvent:
 def _parse_runtime_decision(response: str | dict[str, Any], *, provider: str) -> RuntimeDecision:
     try:
         value = json.loads(response) if isinstance(response, str) else response
+        request_value = value.get("attention_request")
+        attention_request = None
+        if request_value is not None:
+            attention_request = RuntimeAttentionRequest(
+                kind=str(request_value["kind"]).upper(),
+                response_mode=str(request_value["response_mode"]).upper(),
+                priority=str(request_value["priority"]).upper(),
+                title=str(request_value["title"]).strip(),
+                body=str(request_value["body"]).strip(),
+                choices=tuple(str(item).strip() for item in request_value.get("choices", [])),
+                artifact_id=(
+                    str(request_value["artifact_id"]).strip().upper()
+                    if request_value.get("artifact_id")
+                    else None
+                ),
+                artifact_version=(
+                    int(request_value["artifact_version"])
+                    if request_value.get("artifact_version") is not None
+                    else None
+                ),
+            )
         decision = RuntimeDecision(
             summary=str(value["summary"]).strip(),
             status=str(value["status"]).upper(),
             current_objective=str(value["current_objective"]).strip(),
             next_step=str(value["next_step"]).strip(),
             blocker=str(value["blocker"]).strip() or "None",
+            attention_request=attention_request,
         )
     except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
         raise TransportError(f"{provider} returned an invalid project checkpoint.") from exc
@@ -104,6 +188,28 @@ def _parse_runtime_decision(response: str | dict[str, Any], *, provider: str) ->
         raise TransportError(f"{provider} returned unsupported project status '{decision.status}'.")
     if not decision.summary or not decision.current_objective or not decision.next_step:
         raise TransportError(f"{provider} returned an incomplete project checkpoint.")
+    request = decision.attention_request
+    if request is not None:
+        if decision.status != "WAITING":
+            raise TransportError(
+                f"{provider} returned an attention request without waiting for its resolution."
+            )
+        if request.kind not in {"QUESTION", "APPROVAL", "REVIEW", "BLOCKER"}:
+            raise TransportError(f"{provider} returned an unsupported attention request kind.")
+        if request.response_mode not in {"TEXT", "CHOICE", "CONFIRMATION", "ARTIFACT_REVIEW"}:
+            raise TransportError(f"{provider} returned an unsupported attention response mode.")
+        if request.priority not in {"CRITICAL", "HIGH", "MEDIUM", "LOW"}:
+            raise TransportError(f"{provider} returned an unsupported attention priority.")
+        if not request.title or not request.body:
+            raise TransportError(f"{provider} returned an incomplete attention request.")
+        if request.response_mode == "CHOICE" and not request.choices:
+            raise TransportError(f"{provider} returned a choice request without choices.")
+        if request.response_mode != "CHOICE" and request.choices:
+            raise TransportError(f"{provider} returned choices for a non-choice request.")
+        if (request.artifact_id is None) != (request.artifact_version is None):
+            raise TransportError(
+                f"{provider} must provide both artifact ID and version for a pinned request."
+            )
     return decision
 
 
@@ -134,6 +240,7 @@ def _redact_event(event: RuntimeEvent, secret_values: tuple[str, ...]) -> Runtim
 
 def _redact_turn(turn: RuntimeTurn, secret_values: tuple[str, ...]) -> RuntimeTurn:
     decision = turn.decision
+    request = decision.attention_request
     return RuntimeTurn(
         continuation_id=turn.continuation_id,
         turn_id=turn.turn_id,
@@ -143,6 +250,20 @@ def _redact_turn(turn: RuntimeTurn, secret_values: tuple[str, ...]) -> RuntimeTu
             current_objective=_redact_text(decision.current_objective, secret_values),
             next_step=_redact_text(decision.next_step, secret_values),
             blocker=_redact_text(decision.blocker, secret_values),
+            attention_request=(
+                RuntimeAttentionRequest(
+                    kind=request.kind,
+                    response_mode=request.response_mode,
+                    priority=request.priority,
+                    title=_redact_text(request.title, secret_values),
+                    body=_redact_text(request.body, secret_values),
+                    choices=tuple(_redact_text(item, secret_values) for item in request.choices),
+                    artifact_id=request.artifact_id,
+                    artifact_version=request.artifact_version,
+                )
+                if request is not None
+                else None
+            ),
         ),
         usage=turn.usage,
     )

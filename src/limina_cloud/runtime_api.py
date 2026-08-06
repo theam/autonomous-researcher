@@ -44,11 +44,11 @@ def register_runtime_admin_routes(
             "runtime_owner": "limina",
             "auth_mode": runtime.authenticator.mode,
             "runtimes": list(SUPPORTED_RUNTIME_ENGINES),
-            "interfaces": {"rest": "/v1", "mcp": "/mcp/"},
+            "interfaces": {"rest": "/v2", "mcp": "/mcp/"},
         }
 
     @app.get(
-        "/v1/runtime/engines/codex/auth",
+        "/v2/runtime/engines/codex/auth",
         response_model=CodexAuthStatus,
         responses=public_errors,
         tags=["runtime administration"],
@@ -59,7 +59,7 @@ def register_runtime_admin_routes(
         return runtime.supervisor.codex_auth.status()
 
     @app.post(
-        "/v1/runtime/engines/codex/auth/login",
+        "/v2/runtime/engines/codex/auth/login",
         response_model=CodexDeviceLogin | CodexAuthStatus,
         responses=public_errors,
         tags=["runtime administration"],
@@ -74,7 +74,7 @@ def register_runtime_admin_routes(
         return runtime.supervisor.codex_auth.login_from_environment(body.method)
 
     @app.get(
-        "/v1/runtime/engines/codex/auth/login/{login_id}",
+        "/v2/runtime/engines/codex/auth/login/{login_id}",
         response_model=CodexDeviceLogin,
         responses=public_errors,
         tags=["runtime administration"],
@@ -86,7 +86,7 @@ def register_runtime_admin_routes(
         return runtime.supervisor.codex_auth.login_attempt(login_id)
 
     @app.delete(
-        "/v1/runtime/engines/codex/auth/login/{login_id}",
+        "/v2/runtime/engines/codex/auth/login/{login_id}",
         response_model=CodexDeviceLogin,
         responses=public_errors,
         tags=["runtime administration"],
@@ -98,7 +98,7 @@ def register_runtime_admin_routes(
         return runtime.supervisor.codex_auth.cancel_device_login(login_id)
 
     @app.delete(
-        "/v1/runtime/engines/codex/auth",
+        "/v2/runtime/engines/codex/auth",
         response_model=CodexAuthStatus,
         responses=public_errors,
         tags=["runtime administration"],

@@ -11,7 +11,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import parse_qsl, urlsplit
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from .auth import Principal
@@ -95,7 +95,7 @@ class CollaborationService(KnowledgeCollaborationMixin):
                 )
 
     def role_for(self, slug: str, principal: Principal) -> str:
-        if principal.instance_admin or principal.project_admin:
+        if principal.project_admin:
             return "OWNER"
         with self.database.session() as session:
             challenge = self._challenge(session, slug)
@@ -116,7 +116,7 @@ class CollaborationService(KnowledgeCollaborationMixin):
         return role
 
     def visible_project_slugs(self, principal: Principal) -> set[str] | None:
-        if principal.instance_admin or principal.project_admin:
+        if principal.project_admin:
             return None
         with self.database.session() as session:
             return set(
@@ -189,6 +189,12 @@ class CollaborationService(KnowledgeCollaborationMixin):
                 actor,
                 {"subject": member.subject, "role": member.role},
             )
+            session.execute(
+                delete(LiveTicket).where(
+                    LiveTicket.challenge_id == challenge.id,
+                    LiveTicket.subject == member.subject,
+                )
+            )
             return self._member_dict(member)
 
     def remove_member(self, *, slug: str, subject: str, actor: str) -> dict[str, Any]:
@@ -208,6 +214,12 @@ class CollaborationService(KnowledgeCollaborationMixin):
                 if owner_count == 1:
                     raise InvariantError("A project must retain at least one owner.")
             result = self._member_dict(member)
+            session.execute(
+                delete(LiveTicket).where(
+                    LiveTicket.challenge_id == challenge.id,
+                    LiveTicket.subject == subject,
+                )
+            )
             session.delete(member)
             self._event(
                 session,
@@ -801,6 +813,7 @@ class CollaborationService(KnowledgeCollaborationMixin):
             "title": item.title,
             "status": item.status,
             "content": dict(item.payload),
+            "version": item.version,
             "hypothesis_id": item.parent_hypothesis_id,
             "experiment_id": item.parent_experiment_id,
             "created_at": _iso(item.created_at),

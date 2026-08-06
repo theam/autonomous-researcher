@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, field
+from ipaddress import ip_address
 from secrets import compare_digest
 from typing import Any, Protocol
 
@@ -28,6 +30,8 @@ class Principal:
     instance_admin: bool = False
     project_admin: bool = False
     auth_mode: str = "oidc"
+    organization: str | None = None
+    permissions: frozenset[str] = field(default_factory=frozenset)
 
     @property
     def actor(self) -> str:
@@ -188,11 +192,240 @@ class OidcAuthenticator:
         return str(value) == self.admin_value
 
 
+WORKOS_ACCESS_PERMISSION = "limina:access"
+WORKOS_PROJECT_CREATE_PERMISSION = "limina:project-create"
+WORKOS_INSTANCE_ADMIN_PERMISSION = "limina:instance-admin"
+DEV_JWT_MIN_SECRET_BYTES = 32
+DEFAULT_DEV_JWT_ISSUER = "urn:limina:dev"
+DEFAULT_DEV_JWT_AUDIENCE = "limina-api"
+
+
+def _scoped_principal(
+    claims: dict[str, Any],
+    *,
+    expected_organization: str,
+    auth_mode: str,
+) -> Principal:
+    subject = claims.get("sub")
+    if not isinstance(subject, str) or not subject.strip():
+        raise AuthenticationError("The bearer token has no subject.")
+
+    organization = claims.get("org_id")
+    if not isinstance(organization, str) or organization != expected_organization:
+        raise AuthenticationError("The bearer token is not valid for this organization.")
+
+    raw_permissions = claims.get("permissions")
+    if not isinstance(raw_permissions, list) or any(
+        not isinstance(item, str) or not item or item != item.strip() for item in raw_permissions
+    ):
+        raise AuthenticationError("The bearer token has an invalid permissions claim.")
+    permissions = frozenset(raw_permissions)
+    if WORKOS_ACCESS_PERMISSION not in permissions:
+        raise AuthenticationError("The bearer token does not grant Limina access.")
+
+    email_value = claims.get("email")
+    email = email_value.strip() if isinstance(email_value, str) and email_value.strip() else None
+    display_name = str(
+        claims.get("name") or claims.get("preferred_username") or email or subject
+    ).strip()
+    return Principal(
+        subject=subject.strip(),
+        display_name=display_name,
+        email=email,
+        instance_admin=WORKOS_INSTANCE_ADMIN_PERMISSION in permissions,
+        project_admin=False,
+        auth_mode=auth_mode,
+        organization=organization,
+        permissions=permissions,
+    )
+
+
+class WorkOsAuthenticator:
+    """Validate WorkOS User Management tokens for one client and organization."""
+
+    mode = "workos"
+
+    def __init__(
+        self,
+        *,
+        client_id: str,
+        organization: str,
+        api_hostname: str = "api.workos.com",
+        jwks_url: str | None = None,
+        leeway_seconds: int = 30,
+    ) -> None:
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", client_id):
+            raise RuntimeError("LIMINA_WORKOS_CLIENT_ID is invalid.")
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", organization):
+            raise RuntimeError("LIMINA_WORKOS_ORGANIZATION_ID is invalid.")
+        if not re.fullmatch(r"[A-Za-z0-9.-]+", api_hostname):
+            raise RuntimeError(
+                "LIMINA_WORKOS_API_HOSTNAME must be a hostname without a scheme or path."
+            )
+        if not 0 <= leeway_seconds <= 300:
+            raise RuntimeError("WorkOS clock-skew leeway must be between 0 and 300 seconds.")
+
+        self.organization = organization
+        self.issuer = f"https://{api_hostname}/user_management/{client_id}"
+        resolved_jwks = jwks_url or f"https://{api_hostname}/sso/jwks/{client_id}"
+        if not resolved_jwks.startswith("https://"):
+            raise RuntimeError("The WorkOS JWKS endpoint must use HTTPS.")
+        self.leeway_seconds = leeway_seconds
+        self.jwks_client = jwt.PyJWKClient(resolved_jwks, cache_keys=True)
+
+    def authenticate(self, bearer_token: str | None, *, actor_hint: str | None = None) -> Principal:
+        del actor_hint
+        if not bearer_token:
+            raise AuthenticationError()
+        try:
+            signing_key = self.jwks_client.get_signing_key_from_jwt(bearer_token)
+            claims = jwt.decode(
+                bearer_token,
+                signing_key.key,
+                algorithms=["RS256"],
+                issuer=self.issuer,
+                leeway=self.leeway_seconds,
+                options={
+                    "require": ["exp", "iat", "iss", "sub"],
+                    "verify_aud": False,
+                },
+            )
+        except jwt.PyJWTError as exc:
+            raise AuthenticationError("The bearer token is invalid or expired.") from exc
+        return _scoped_principal(
+            claims,
+            expected_organization=self.organization,
+            auth_mode=self.mode,
+        )
+
+
+def _is_loopback_bind_host(bind_host: str | None) -> bool:
+    if bind_host is None:
+        return False
+    normalized = bind_host.strip().lower().removeprefix("[").removesuffix("]")
+    if normalized == "localhost":
+        return True
+    try:
+        return ip_address(normalized).is_loopback
+    except ValueError:
+        return False
+
+
+class DevJwtAuthenticator:
+    """Verify local-only HS256 identities used by deterministic browser tests."""
+
+    mode = "dev-jwt"
+
+    def __init__(
+        self,
+        *,
+        secret: str,
+        organization: str,
+        bind_host: str | None,
+        issuer: str = DEFAULT_DEV_JWT_ISSUER,
+        audience: str = DEFAULT_DEV_JWT_AUDIENCE,
+        leeway_seconds: int = 0,
+    ) -> None:
+        if not _is_loopback_bind_host(bind_host):
+            raise RuntimeError("Development JWT authentication requires a loopback bind host.")
+        if len(secret.encode("utf-8")) < DEV_JWT_MIN_SECRET_BYTES:
+            raise RuntimeError(
+                f"LIMINA_DEV_JWT_SECRET must be at least {DEV_JWT_MIN_SECRET_BYTES} bytes."
+            )
+        if not organization.strip():
+            raise RuntimeError("LIMINA_DEV_JWT_ORGANIZATION_ID is required.")
+        if not issuer.strip() or not audience.strip():
+            raise RuntimeError("Development JWT issuer and audience must not be empty.")
+        if not 0 <= leeway_seconds <= 300:
+            raise RuntimeError(
+                "Development JWT clock-skew leeway must be between 0 and 300 seconds."
+            )
+
+        self.secret = secret
+        self.organization = organization.strip()
+        self.issuer = issuer.strip()
+        self.audience = audience.strip()
+        self.leeway_seconds = leeway_seconds
+
+    def authenticate(self, bearer_token: str | None, *, actor_hint: str | None = None) -> Principal:
+        del actor_hint
+        if not bearer_token:
+            raise AuthenticationError()
+        try:
+            claims = jwt.decode(
+                bearer_token,
+                self.secret,
+                algorithms=["HS256"],
+                issuer=self.issuer,
+                audience=self.audience,
+                leeway=self.leeway_seconds,
+                options={"require": ["exp", "iat", "iss", "sub", "aud"]},
+            )
+        except jwt.PyJWTError as exc:
+            raise AuthenticationError("The bearer token is invalid or expired.") from exc
+        return _scoped_principal(
+            claims,
+            expected_organization=self.organization,
+            auth_mode=self.mode,
+        )
+
+
 def authenticator_from_environment(
-    *, local_token: str | None = None, local_admin_token: str | None = None
+    *,
+    local_token: str | None = None,
+    local_admin_token: str | None = None,
+    bind_host: str | None = None,
 ) -> Authenticator:
     issuer = os.environ.get("LIMINA_OIDC_ISSUER", "").strip()
     audience = os.environ.get("LIMINA_OIDC_AUDIENCE", "").strip()
+    workos_client_id = os.environ.get("LIMINA_WORKOS_CLIENT_ID", "").strip()
+    workos_organization = os.environ.get("LIMINA_WORKOS_ORGANIZATION_ID", "").strip()
+    workos_hostname = os.environ.get("LIMINA_WORKOS_API_HOSTNAME", "").strip()
+    dev_enabled = os.environ.get("LIMINA_CONSOLE_DEV_AUTH", "").strip()
+    dev_secret = os.environ.get("LIMINA_DEV_JWT_SECRET", "")
+    dev_organization = os.environ.get("LIMINA_DEV_JWT_ORGANIZATION_ID", "").strip()
+    dev_issuer = os.environ.get("LIMINA_DEV_JWT_ISSUER", "").strip()
+    dev_audience = os.environ.get("LIMINA_DEV_JWT_AUDIENCE", "").strip()
+
+    configured_modes = sum(
+        (
+            bool(issuer or audience),
+            bool(workos_client_id or workos_organization or workos_hostname),
+            bool(dev_enabled or dev_secret or dev_organization or dev_issuer or dev_audience),
+        )
+    )
+    if configured_modes > 1:
+        raise RuntimeError("Configure only one of OIDC, WorkOS, or development JWT authentication.")
+
+    if workos_client_id or workos_organization or workos_hostname:
+        if not workos_client_id or not workos_organization:
+            raise RuntimeError(
+                "LIMINA_WORKOS_CLIENT_ID and LIMINA_WORKOS_ORGANIZATION_ID must be set together."
+            )
+        return WorkOsAuthenticator(
+            client_id=workos_client_id,
+            organization=workos_organization,
+            api_hostname=workos_hostname or "api.workos.com",
+            leeway_seconds=int(os.environ.get("LIMINA_WORKOS_LEEWAY_SECONDS", "30")),
+        )
+
+    if dev_enabled or dev_secret or dev_organization or dev_issuer or dev_audience:
+        if dev_enabled != "1":
+            raise RuntimeError("Development JWT authentication requires LIMINA_CONSOLE_DEV_AUTH=1.")
+        if not dev_secret or not dev_organization:
+            raise RuntimeError(
+                "LIMINA_CONSOLE_DEV_AUTH=1 requires LIMINA_DEV_JWT_SECRET and "
+                "LIMINA_DEV_JWT_ORGANIZATION_ID."
+            )
+        return DevJwtAuthenticator(
+            secret=dev_secret,
+            organization=dev_organization,
+            bind_host=bind_host,
+            issuer=dev_issuer or DEFAULT_DEV_JWT_ISSUER,
+            audience=dev_audience or DEFAULT_DEV_JWT_AUDIENCE,
+            leeway_seconds=int(os.environ.get("LIMINA_DEV_JWT_LEEWAY_SECONDS", "0")),
+        )
+
     if issuer or audience:
         if not issuer or not audience:
             raise RuntimeError("LIMINA_OIDC_ISSUER and LIMINA_OIDC_AUDIENCE must be set together.")

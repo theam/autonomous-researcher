@@ -8,6 +8,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from .attention_service import expire_open_requests
 from .engines import normalize_runtime_engine
 from .errors import ConflictError, InvariantError, NotFoundError
 from .models import Challenge, CoordinatorState, ProjectMember, ProjectResource, utcnow
@@ -125,6 +126,94 @@ class ProjectServiceMixin:
                 for project in projects
             ]
 
+    def update_project_draft(
+        self,
+        *,
+        slug: str,
+        name: str | None,
+        objective: str | None,
+        context: str | None,
+        success_criteria: str | None,
+        runtime_engine: str | None,
+        expected_version: int,
+        actor: str,
+        command_id: str,
+    ) -> dict[str, Any]:
+        """Update mutable kickoff fields with revision and retry protection."""
+
+        if expected_version < 1:
+            raise InvariantError("Expected project version must be positive.")
+        if name is not None:
+            self._require_text("name", name)
+        if objective is not None:
+            self._require_text("objective", objective)
+        if success_criteria is not None:
+            self._require_text("success criteria", success_criteria)
+        if runtime_engine is not None:
+            try:
+                runtime_engine = normalize_runtime_engine(runtime_engine)
+            except ValueError as exc:
+                raise InvariantError(str(exc), runtime_engine=runtime_engine) from exc
+
+        def operation(session: Session) -> dict[str, Any]:
+            challenge = session.scalar(
+                select(Challenge).where(Challenge.slug == slug.lower()).with_for_update()
+            )
+            if challenge is None:
+                raise NotFoundError(f"Project '{slug}' does not exist.")
+            coordinator = session.get(CoordinatorState, challenge.id)
+            if coordinator is None or coordinator.status != "CREATED":
+                raise InvariantError(
+                    "Project kickoff fields can only change before the first start."
+                )
+            if challenge.version != expected_version:
+                raise ConflictError(
+                    "The project draft changed. Refresh before saving again.",
+                    expected_version=expected_version,
+                    current_version=challenge.version,
+                )
+            changed_fields = [
+                field
+                for field, value in {
+                    "name": name,
+                    "objective": objective,
+                    "context": context,
+                    "success_criteria": success_criteria,
+                    "runtime": runtime_engine,
+                }.items()
+                if value is not None
+            ]
+            if not changed_fields:
+                return self._challenge_dict(challenge, coordinator)
+            if name is not None:
+                challenge.name = name.strip()
+            if objective is not None:
+                challenge.objective = objective.strip()
+                coordinator.current_objective = challenge.objective
+            if context is not None:
+                challenge.context = context.strip()
+            if success_criteria is not None:
+                challenge.success_criteria = success_criteria.strip()
+            if runtime_engine is not None:
+                challenge.runtime_engine = runtime_engine
+            changed_at = utcnow()
+            challenge.version += 1
+            challenge.updated_at = changed_at
+            coordinator.version += 1
+            coordinator.updated_at = changed_at
+            self._record_event(
+                session,
+                challenge=challenge,
+                event_type="project.draft_updated",
+                actor=actor,
+                command_id=command_id,
+                payload={"fields": sorted(changed_fields)},
+            )
+            session.flush()
+            return self._challenge_dict(challenge, coordinator)
+
+        return self._execute(command_id, "project.draft.update", actor, operation)
+
     def change_project_state(
         self,
         *,
@@ -167,6 +256,12 @@ class ProjectServiceMixin:
                     )
                 challenge.status = "ARCHIVED"
                 coordinator.status = "STOPPED"
+                expire_open_requests(
+                    session,
+                    challenge_id=challenge.id,
+                    actor=actor,
+                    reason="project_archived",
+                )
                 target = "ARCHIVED"
             else:
                 target = PROJECT_TRANSITIONS[action].get(coordinator.status)

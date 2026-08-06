@@ -1,0 +1,49 @@
+{
+  "name": "@limina/console",
+  "version": "0.1.0",
+  "private": true,
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "next dev --hostname 127.0.0.1 --port 3000",
+    "build": "LIMINA_ALLOW_LOCAL_AUTH=1 next build",
+    "contract:generate": "cd ../.. && uv run python scripts/console_contract.py",
+    "contract:check": "cd ../.. && uv run python scripts/console_contract.py --check",
+    "check:auth-boundary": "node scripts/check-authorization-boundary.mjs",
+    "start": "next start --hostname 127.0.0.1 --port 3000",
+    "lint": "eslint . --max-warnings=0",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:e2e": "playwright test"
+  },
+  "dependencies": {
+    "@carbon/icons-react": "11.80.0",
+    "@theam/brand-system": "0.2.6",
+    "@workos-inc/authkit-nextjs": "4.0.1",
+    "jose": "6.1.0",
+    "next": "15.5.21",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "4.10.2",
+    "@eslint/eslintrc": "3.3.1",
+    "@eslint/js": "9.35.0",
+    "@playwright/test": "1.55.0",
+    "@testing-library/react": "16.3.0",
+    "@types/node": "22.18.3",
+    "@types/react": "18.3.24",
+    "@types/react-dom": "18.3.7",
+    "@vitejs/plugin-react": "5.0.2",
+    "eslint": "9.35.0",
+    "eslint-config-next": "15.5.21",
+    "jsdom": "26.1.0",
+    "openapi-typescript": "7.13.0",
+    "typescript": "5.9.2",
+    "vite": "7.1.5",
+    "vitest": "3.2.4"
+  },
+  "packageManager": "pnpm@11.16.0"
+}

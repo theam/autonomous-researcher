@@ -1,0 +1,43 @@
+schema_version: 1
+system_version: 0.2.6
+generated_at: 2026-08-06T09:13:36Z
+generator_mode: create
+tier: 50
+type: proto
+source_repo: theam/brand-system
+entrypoint: app/page.tsx
+stack: react
+mode_applied: auto
+signature_variant: product_logo_plus_tam_text
+surface_scope: desktop_and_mobile
+display_variant_used: sans_default
+audience: research_operators
+anonymized: false
+components_used:
+  - shell.product
+  - navigation.primary
+  - panel.ruled
+  - button.standard.primary
+  - button.standard.secondary
+  - field.text
+  - tag.status
+  - table.data
+  - empty-state
+  - feedback.inline
+semantic_accent_used:
+  - action
+  - selection
+  - attention
+  - critical
+  - success
+open_decisions:
+  - "Limina uses one restrained violet-blue product accent mapped onto TAM semantic roles."
+  - "The desktop attention desk uses a five-column queue and three-column detail rail."
+warnings:
+  - "The private @theam/brand-system package requires a GitHub Packages read token at build time."
+  - "The newer TAM-50 tier signature rule supersedes the older proto generator wording."
+applied_from_system:
+  - "TAM-50 product identity and TAM-100 proto typography, spacing, layout, icon, and component rules"
+  - "IBM Plex Mono for chrome and IBM Plex Sans for prose, inputs, explanations, and display"
+  - "r4 contained surfaces, r0 writing inputs, no shadows, and no pill buttons except tags"
+  - "Product logo plus linked An initiative by The Agile Monkeys footer signature"

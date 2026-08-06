@@ -8,6 +8,7 @@ import json
 import os
 import secrets
 from contextlib import suppress
+from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -451,11 +452,17 @@ class ProjectSupervisor:
                 objective = turn.decision.current_objective
                 next_step = turn.decision.next_step
                 blocker = turn.decision.blocker
+                attention_request = (
+                    asdict(turn.decision.attention_request)
+                    if turn.decision.attention_request is not None
+                    else None
+                )
             else:
                 checkpoint_status = latest["status"]
                 objective = latest["current_objective"]
                 next_step = latest["next_step"]
                 blocker = latest["blocker"]
+                attention_request = None
             self.service.checkpoint_coordinator(
                 slug=slug,
                 current_objective=objective,
@@ -469,6 +476,8 @@ class ProjectSupervisor:
                 acknowledge_message_ids=list(accepted_messages),
                 actor=self.runtime_id,
                 command_id=str(uuid4()),
+                attention_request=attention_request,
+                run_id=run_id if attention_request is not None else None,
             )
             self._runtime_event(
                 slug,
@@ -720,6 +729,11 @@ Never ask the user to operate internal commands. Persist decisive knowledge befo
 Human steering may arrive during this turn. Incorporate it immediately unless safety requires an
 explicit interruption. Ask the user only for mission decisions, feedback, approvals, or missing
 resource access. Your final response must satisfy the provided structured checkpoint schema.
+Set `attention_request` to null by default. Create one only when credible progress is blocked on a
+specific human decision, missing context, approval, or evidence review that the runtime cannot
+resolve itself. Do not create requests for progress updates, optional preferences, routine status,
+or questions answerable from project knowledge or available tools. A non-null request must use
+WAITING status, ask one concrete question, and advertise only the response mode needed to continue.
 Treat SECRET resources as sensitive: never print them, include their values in command arguments,
 persist them to files or knowledge, or repeat them in messages. Reference secret environment
 variables by name and disclose their values only to the intended authenticated service.

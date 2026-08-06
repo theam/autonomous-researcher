@@ -24,11 +24,13 @@ from limina_cloud.runtime import (
     TURN_OUTPUT_SCHEMA,
     ClaudeCodeAgentSession,
     ProjectSupervisor,
+    RuntimeAttentionRequest,
     RuntimeDecision,
     RuntimeEvent,
     RuntimeTurn,
     _claude_environment,
     _codex_environment,
+    _parse_runtime_decision,
     _redact_event,
     _redact_turn,
 )
@@ -162,6 +164,13 @@ class CloudRuntimeTests(unittest.TestCase):
                     "Rotate sensitive-123",
                     "Ask for access",
                     "sensitive-123 expired",
+                    RuntimeAttentionRequest(
+                        kind="QUESTION",
+                        response_mode="TEXT",
+                        priority="HIGH",
+                        title="Provide sensitive-123",
+                        body="The value sensitive-123 is needed.",
+                    ),
                 ),
             ),
             values,
@@ -170,6 +179,56 @@ class CloudRuntimeTests(unittest.TestCase):
         self.assertNotIn("sensitive-123", str(turn))
         self.assertIn("[REDACTED]", str(event))
         self.assertIn("[REDACTED]", str(turn))
+
+    def test_runtime_decision_accepts_one_typed_attention_request(self) -> None:
+        decision = _parse_runtime_decision(
+            {
+                "summary": "Need a product decision.",
+                "status": "WAITING",
+                "current_objective": "Choose the deployment boundary.",
+                "next_step": "Continue after the operator chooses.",
+                "blocker": "Two valid deployment boundaries remain.",
+                "attention_request": {
+                    "kind": "APPROVAL",
+                    "response_mode": "CHOICE",
+                    "priority": "HIGH",
+                    "title": "Choose a deployment boundary",
+                    "body": "Select the boundary that should govern the release.",
+                    "choices": ["Private ingress", "Loopback only"],
+                    "artifact_id": None,
+                    "artifact_version": None,
+                },
+            },
+            provider="test runtime",
+        )
+
+        self.assertIsNotNone(decision.attention_request)
+        assert decision.attention_request is not None
+        self.assertEqual(decision.attention_request.response_mode, "CHOICE")
+        self.assertEqual(decision.attention_request.choices, ("Private ingress", "Loopback only"))
+
+    def test_runtime_decision_rejects_choices_for_text_request(self) -> None:
+        with self.assertRaises(TransportError):
+            _parse_runtime_decision(
+                {
+                    "summary": "Need input.",
+                    "status": "WAITING",
+                    "current_objective": "Resolve a blocker.",
+                    "next_step": "Continue after input.",
+                    "blocker": "Missing context.",
+                    "attention_request": {
+                        "kind": "QUESTION",
+                        "response_mode": "TEXT",
+                        "priority": "MEDIUM",
+                        "title": "Provide context",
+                        "body": "Describe the missing context.",
+                        "choices": ["Invalid choice"],
+                        "artifact_id": None,
+                        "artifact_version": None,
+                    },
+                },
+                provider="test runtime",
+            )
 
     def test_sqlite_utc_timestamps_survive_a_read_round_trip(self) -> None:
         created = self.service.create_hypothesis(
