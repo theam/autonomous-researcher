@@ -1,5 +1,4 @@
 import { ConsoleFrame } from "@/components/console-frame";
-import { ProjectNav } from "@/components/project-nav";
 import { getProject, getRun } from "@/lib/limina/server";
 import { formatDuration, formatTimestamp, readableTokenCount } from "@/lib/format";
 
@@ -9,8 +8,11 @@ export default async function RunDetailPage({ params }: PageProps) {
   const { slug, runId } = await params;
   const [project, run] = await Promise.all([getProject(slug), getRun(slug, runId)]);
   return (
-    <ConsoleFrame activeNav="project" currentProject={{ slug, name: project.name }}>
-      <ProjectNav slug={slug} active="runs" />
+    <ConsoleFrame
+      activeNav="project"
+      activeProjectSection="runs"
+      currentProject={{ slug, name: project.name }}
+    >
       <article className="lc-grid">
         <section className="lc-col-5 lc-panel lc-stack lc-stack--5">
           <header className="lc-stack lc-stack--2">

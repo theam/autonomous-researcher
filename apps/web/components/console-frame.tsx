@@ -1,10 +1,16 @@
 import type { ReactNode } from "react";
 
-import { AppShell, type ShellCurrentProject, type ShellNavKey } from "@/components/app-shell";
+import {
+  AppShell,
+  type ProjectSection,
+  type ShellCurrentProject,
+  type ShellNavKey,
+} from "@/components/app-shell";
 import { getMe } from "@/lib/limina/server";
 
 type ConsoleFrameProps = {
   activeNav: ShellNavKey;
+  activeProjectSection?: ProjectSection | null;
   currentProject?: ShellCurrentProject | null;
   children: ReactNode;
 };
@@ -18,6 +24,7 @@ const authLabels: Record<string, string> = {
 
 export async function ConsoleFrame({
   activeNav,
+  activeProjectSection = null,
   currentProject = null,
   children,
 }: ConsoleFrameProps) {
@@ -25,6 +32,7 @@ export async function ConsoleFrame({
   return (
     <AppShell
       activeNav={activeNav}
+      activeProjectSection={activeProjectSection}
       currentProject={currentProject}
       operator={{
         name: me.display_name,

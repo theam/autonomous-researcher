@@ -6,6 +6,17 @@
 - **Product owner:** Adrián
 - **Scope:** Product, UX, public API, architecture, and binding implementation contract.
 
+## Implementation closure amendment — 2026-08-07
+
+Leader review rejected the first settings composition as too card-heavy and too dependent on
+horizontal navigation. The accepted implementation now uses a persistent workspace rail with a
+nested project group, plus real Settings sub-routes for General, Sources, Environment, Team, and
+Notifications. Settings are read-state-first; bounded mutation forms open through addressable query
+states and close through a post-action redirect. Brief/preflight remains an Overview concern.
+
+This is deliberately Vercel-inspired information architecture, not a visual clone: TAM-50 remains
+the binding typography, spacing, surface, icon, color, and signature system.
+
 ## 1. Decision summary
 
 This plan incorporates the leader's decisions:

@@ -1,7 +1,20 @@
 # Evaluation · Limina Console — TAM-50 · proto
 
 _Evaluator: `skills/tam-brand-system/evaluators/proto.md`, independent of the generator._
-_Date: 2026-08-06 · Verdict: **Compliant**_
+_Date: 2026-08-07 · Verdict: **Compliant**_
+
+## 2026-08-07 navigation reevaluation
+
+The post-acceptance information-architecture pass remains compliant. The new persistent sidebar
+uses Carbon icons, TAM spacing and semantic roles, r4 interactive surfaces, no shadows, and the
+existing product-logo-plus-TAM-text signature. Project navigation is structurally nested under the
+workspace rail; Settings uses a restrained route index and border-separated rows rather than a
+generic card grid. Writing forms retain r0 inputs and appear only on explicit edit/add routes.
+
+Desktop dark, 1280×720, and narrow mobile captures were inspected. The rail and footer remain
+visible at 1280×720, the main canvas has no page-level horizontal overflow, and mobile preserves the
+same navigation order through a native disclosure. The Playwright desktop/mobile accessibility
+suite passes 18/18 after the change. No TAM-50 check changed from pass to fail.
 
 ## 1 · Summary
 

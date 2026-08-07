@@ -1,28 +1,35 @@
 /**
- * Console shell: skip link, header, primary navigation, operator identity,
- * main landmark, and the mandatory TAM footer signature.
+ * Console shell: a persistent workspace rail, project-level navigation, main
+ * landmark, operator identity, and the mandatory TAM footer signature.
  *
- * Server-compatible: no "use client", no hooks, no event handlers. Every value
- * is supplied explicitly by the page, including the auth mode — the shell never
- * infers identity or authority, and never decides what a user may do.
+ * Server-compatible: no hooks and no authority inference. Pages supply the
+ * active workspace/project state explicitly; the shell only renders it.
  */
 
 import type { ReactNode } from "react";
 
+import {
+  Activity,
+  Add,
+  Document,
+  Folders,
+  Home,
+  ListChecked,
+  Play,
+  Settings as SettingsIcon,
+} from "@carbon/icons-react";
+import type { CarbonIconType } from "@carbon/icons-react";
 import Link from "next/link";
-import { Folders, ListChecked } from "@carbon/icons-react";
 
 import { LiminaMark } from "@/components/limina-mark";
 
-export type ShellNavKey = "today" | "projects" | "project";
+export type ShellNavKey = "today" | "projects" | "new" | "project" | "account";
+export type ProjectSection = "overview" | "knowledge" | "runs" | "live" | "settings";
 
 export type ShellOperator = {
-  /** Display name, server-derived. */
   name: string;
   email?: string | null;
-  /** Human-readable auth mode, e.g. "WorkOS" or "Local dev". */
   authModeLabel: string;
-  /** Optional organization name, shown only when supplied. */
   organizationLabel?: string | null;
 };
 
@@ -34,95 +41,192 @@ export type ShellCurrentProject = {
 export type AppShellProps = {
   operator: ShellOperator;
   activeNav: ShellNavKey;
-  /** Shown as a third nav affordance only while a project is in scope. */
+  activeProjectSection?: ProjectSection | null;
   currentProject?: ShellCurrentProject | null;
   children: ReactNode;
 };
 
+type ProjectNavItem = {
+  id: ProjectSection;
+  label: string;
+  suffix: string;
+  icon: CarbonIconType;
+};
+
 const TAM_URL = "https://theagilemonkeys.com";
+
+const projectNavigation: ProjectNavItem[] = [
+  { id: "overview", label: "Overview", suffix: "", icon: Home },
+  { id: "knowledge", label: "Knowledge", suffix: "/knowledge", icon: Document },
+  { id: "runs", label: "Runs", suffix: "/runs", icon: Play },
+  { id: "live", label: "Live", suffix: "/live", icon: Activity },
+  { id: "settings", label: "Settings", suffix: "/settings", icon: SettingsIcon },
+];
+
+function ProjectNavigation({
+  activeProjectSection,
+  currentProject,
+}: {
+  activeProjectSection?: ProjectSection | null;
+  currentProject: ShellCurrentProject;
+}) {
+  const base = `/projects/${encodeURIComponent(currentProject.slug)}`;
+  return (
+    <div className="lc-sidebar__project">
+      <p className="lc-sidebar__label">Project</p>
+      <Link className="lc-sidebar__project-name" href={base}>
+        <Folders size={16} aria-hidden focusable="false" />
+        <span>{currentProject.name}</span>
+      </Link>
+      <nav className="lc-sidebar__nav lc-sidebar__nav--nested" aria-label="Project">
+        {projectNavigation.map((item) => {
+          const Icon = item.icon;
+          return (
+            <Link
+              className="lc-sidebar__link"
+              href={`${base}${item.suffix}`}
+              aria-current={activeProjectSection === item.id ? "page" : undefined}
+              key={item.id}
+            >
+              <Icon size={16} aria-hidden focusable="false" />
+              <span>{item.label}</span>
+            </Link>
+          );
+        })}
+      </nav>
+    </div>
+  );
+}
+
+function WorkspaceNavigation({ activeNav }: { activeNav: ShellNavKey }) {
+  return (
+    <nav className="lc-sidebar__nav" aria-label="Primary">
+      <Link
+        className="lc-sidebar__link"
+        href="/"
+        aria-current={activeNav === "today" ? "page" : undefined}
+      >
+        <ListChecked size={16} aria-hidden focusable="false" />
+        <span>Today</span>
+      </Link>
+      <Link
+        className="lc-sidebar__link"
+        href="/projects"
+        aria-current={activeNav === "projects" ? "page" : undefined}
+      >
+        <Folders size={16} aria-hidden focusable="false" />
+        <span>Projects</span>
+      </Link>
+      <Link
+        className="lc-sidebar__link"
+        href="/new"
+        aria-current={activeNav === "new" ? "page" : undefined}
+      >
+        <Add size={16} aria-hidden focusable="false" />
+        <span>New Project</span>
+      </Link>
+    </nav>
+  );
+}
+
+function OperatorLink({ operator, active }: { operator: ShellOperator; active: boolean }) {
+  return (
+    <Link
+      className="lc-operator"
+      href="/settings"
+      aria-current={active ? "page" : undefined}
+    >
+      <span className="lc-operator__avatar" aria-hidden>
+        {operator.name.slice(0, 1).toUpperCase()}
+      </span>
+      <span className="lc-operator__copy">
+        <span className="lc-meta lc-meta--strong">{operator.name}</span>
+        <span className="lc-meta">
+          {operator.organizationLabel
+            ? `${operator.organizationLabel} · ${operator.authModeLabel}`
+            : operator.authModeLabel}
+        </span>
+      </span>
+    </Link>
+  );
+}
 
 export function AppShell({
   operator,
   activeNav,
+  activeProjectSection = null,
   currentProject = null,
   children,
 }: AppShellProps) {
+  const showProjectNavigation = activeNav === "project" && currentProject;
+
   return (
     <div className="lc-shell">
       <a className="lc-skip-link" href="#main">
         Skip to main content
       </a>
 
-      <header className="lc-header">
-        <div className="lc-bounds lc-header__inner">
+      <aside className="lc-sidebar">
+        <div className="lc-sidebar__brand-row">
           <Link className="lc-brand" href="/">
             <LiminaMark size={20} title="Limina Console" />
             <span className="lc-brand__word">Limina</span>
           </Link>
+          <span className="lc-sidebar__product">Console</span>
+        </div>
 
-          <nav className="lc-nav" aria-label="Primary">
-            <Link
-              className="lc-nav__link"
-              href="/"
-              aria-current={activeNav === "today" ? "page" : undefined}
-            >
-              <ListChecked size={16} aria-hidden focusable="false" />
-              Today
-            </Link>
-            <Link
-              className="lc-nav__link"
-              href="/projects"
-              aria-current={activeNav === "projects" ? "page" : undefined}
-            >
-              <Folders size={16} aria-hidden focusable="false" />
-              Projects
-            </Link>
-            {currentProject ? (
-              <Link
-                className="lc-nav__link"
-                href={`/projects/${currentProject.slug}`}
-                aria-current={activeNav === "project" ? "page" : undefined}
-              >
-                {currentProject.name}
-              </Link>
+        <details className="lc-mobile-navigation">
+          <summary className="tam-button tam-button--outline">Navigation</summary>
+          <div className="lc-mobile-navigation__body">
+            <WorkspaceNavigation activeNav={activeNav} />
+            {showProjectNavigation ? (
+              <ProjectNavigation
+                activeProjectSection={activeProjectSection}
+                currentProject={currentProject}
+              />
             ) : null}
-          </nav>
+          </div>
+        </details>
 
-          <span className="lc-header__spacer" />
+        <div className="lc-sidebar__desktop-body">
+          <WorkspaceNavigation activeNav={activeNav} />
+          {showProjectNavigation ? (
+            <ProjectNavigation
+              activeProjectSection={activeProjectSection}
+              currentProject={currentProject}
+            />
+          ) : null}
+        </div>
 
-          <Link className="lc-operator" href="/settings" aria-label="Open operator profile">
-            <span className="lc-meta lc-meta--strong">{operator.name}</span>
-            <span className="lc-meta">
-              {operator.organizationLabel
-                ? `${operator.organizationLabel} · ${operator.authModeLabel}`
-                : operator.authModeLabel}
+        <div className="lc-sidebar__bottom">
+          <OperatorLink operator={operator} active={activeNav === "account"} />
+        </div>
+      </aside>
+
+      <div className="lc-workspace">
+        <main className="lc-main" id="main" tabIndex={-1}>
+          <div className="lc-content">{children}</div>
+        </main>
+
+        <footer className="lc-footer">
+          <div className="lc-content lc-footer__inner">
+            <span className="lc-footer__signature">
+              <LiminaMark size={16} />
+              <span>Limina Console</span>
             </span>
-          </Link>
-        </div>
-      </header>
-
-      <main className="lc-main" id="main" tabIndex={-1}>
-        <div className="lc-bounds">{children}</div>
-      </main>
-
-      <footer className="lc-footer">
-        <div className="lc-bounds lc-footer__inner">
-          <span className="lc-footer__signature">
-            <LiminaMark size={16} />
-            <span>Limina Console</span>
-          </span>
-          <span className="lc-footer__signature">
-            <a
-              className="lc-footer__link"
-              href={TAM_URL}
-              target="_blank"
-              rel="noreferrer noopener"
-            >
-              An initiative by The Agile Monkeys
-            </a>
-          </span>
-        </div>
-      </footer>
+            <span className="lc-footer__signature">
+              <a
+                className="lc-footer__link"
+                href={TAM_URL}
+                target="_blank"
+                rel="noreferrer noopener"
+              >
+                An initiative by The Agile Monkeys
+              </a>
+            </span>
+          </div>
+        </footer>
+      </div>
     </div>
   );
 }

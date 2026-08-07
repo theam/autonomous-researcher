@@ -1,6 +1,6 @@
 # Limina Console release evidence
 
-Date: 2026-08-06
+Date: 2026-08-07
 Candidate branch: `feat/limina-console-tam50`
 
 This ledger separates what the local release candidate proves from what still requires an external
@@ -30,11 +30,17 @@ evidence.
 - The production Compose topology runs PostgreSQL, migrations, runtime, Next.js, and Caddy with
   explicit auth-mode selection.
 - Desktop and mobile Chromium journeys cover meaningful rendering, keyboard skip navigation,
-  critical/serious axe findings, project creation, write-only secret rendering, live-ticket issue,
-  and attached WebSocket connection.
+  critical/serious axe findings, hierarchical workspace/project/settings navigation, project
+  creation, write-only secret rendering, live-ticket issue, and attached WebSocket connection.
+- The Vercel-inspired navigation pass replaces the horizontal project tabs and settings card grid
+  with a persistent project rail, route-level settings categories, read-state-first rows, and
+  URL-addressable edit/add forms. The project brief and preflight remain on Overview rather than
+  being duplicated as configurable settings.
 
 Independent judgment records:
 
+- [Claude Code Opus 5 navigation acceptance](reviews/claude-fable-console-navigation-acceptance-2026-08-07.md)
+  — **APPROVE** after reciprocal resolution; no open P0/P1.
 - [Claude Code Opus 5 implementation acceptance](reviews/claude-fable-console-acceptance-2026-08-06.md)
   — **APPROVE WITH FOLLOW-UPS**, no P0/P1.
 - [Canonical TAM-50 evaluation](../apps/web/evaluation.md) — **Compliant**, 24/24 UX checks and
@@ -126,12 +132,12 @@ Command: `pnpm test:e2e` from `apps/web`, against the deployed Compose instance.
 ```text
 $ playwright test
 
-Running 14 tests using 8 workers
+Running 18 tests using 8 workers
 
-  14 passed (9.2s)
+  18 passed (9.6s)
 ```
 
-The browser run created two deterministic `console-e2e-*` fixtures. Both exact rows were deleted
+The browser run created deterministic `console-e2e-*` fixtures. Those exact rows were deleted
 after the pass; the local handoff database contains only `retrieval-reliability` and
 `retrieval-reliability-clone`.
 

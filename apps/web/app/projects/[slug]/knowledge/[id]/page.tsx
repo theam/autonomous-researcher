@@ -1,7 +1,6 @@
 import { ConsoleFrame } from "@/components/console-frame";
 import { ArtifactReader } from "@/components/artifact-reader";
 import { PendingButton } from "@/components/pending-button";
-import { ProjectNav } from "@/components/project-nav";
 import { addArtifactCommentAction, addArtifactTagAction, reviewArtifactAction } from "@/app/actions";
 import {
   getArtifact,
@@ -25,8 +24,11 @@ export default async function ArtifactPage({ params }: PageProps) {
   const canReview = project.capabilities.includes("artifact:review");
   const canCollaborate = project.capabilities.includes("knowledge:collaborate");
   return (
-    <ConsoleFrame activeNav="project" currentProject={{ slug, name: project.name }}>
-      <ProjectNav slug={slug} active="knowledge" />
+    <ConsoleFrame
+      activeNav="project"
+      activeProjectSection="knowledge"
+      currentProject={{ slug, name: project.name }}
+    >
       <ArtifactReader
         artifact={artifact}
         slug={slug}
@@ -35,7 +37,7 @@ export default async function ArtifactPage({ params }: PageProps) {
         comments={comments}
       />
       {canCollaborate ? (
-        <section className="lc-settings-grid lc-review-form">
+        <section className="lc-review-grid lc-review-form">
           <form
             className="lc-panel lc-stack lc-stack--3"
             action={addArtifactCommentAction.bind(null, slug, id)}

@@ -1,7 +1,8 @@
+import Link from "next/link";
+
 import { lifecycleAction } from "@/app/actions";
 import { ConsoleFrame } from "@/components/console-frame";
 import { PendingButton } from "@/components/pending-button";
-import { ProjectNav } from "@/components/project-nav";
 import { ProjectOverview } from "@/components/project-overview";
 import type { DeskAction } from "@/components/attention-desk";
 import { formatRelative } from "@/lib/format";
@@ -11,6 +12,13 @@ type PageProps = { params: Promise<{ slug: string }> };
 
 function total(counts: Record<string, number> | undefined): number {
   return Object.values(counts ?? {}).reduce((sum, value) => sum + value, 0);
+}
+
+function preflightRemedy(slug: string, checkName: string): string | null {
+  const settings = `/projects/${encodeURIComponent(slug)}/settings`;
+  if (["mission", "success_criteria", "runtime"].includes(checkName)) return settings;
+  if (checkName === "sources") return `${settings}/sources`;
+  return null;
 }
 
 export default async function ProjectOverviewPage({ params }: PageProps) {
@@ -73,19 +81,32 @@ export default async function ProjectOverviewPage({ params }: PageProps) {
   }
 
   return (
-    <ConsoleFrame activeNav="project" currentProject={{ slug, name: project.name }}>
-      <ProjectNav slug={slug} active="overview" />
+    <ConsoleFrame
+      activeNav="project"
+      activeProjectSection="overview"
+      currentProject={{ slug, name: project.name }}
+    >
       {!preflight.ready && project.status === "CREATED" ? (
         <section className="lc-preflight" aria-labelledby="preflight-title">
           <h2 className="tam-eyebrow" id="preflight-title">Preflight needs attention</h2>
           <ul>
             {preflight.checks
               .filter((check) => check.status === "FAIL")
-              .map((check) => (
-                <li key={check.name}>
-                  <strong>{check.name}</strong> — {check.detail}
-                </li>
-              ))}
+              .map((check) => {
+                const remedy = preflightRemedy(slug, check.name);
+                return (
+                  <li key={check.name}>
+                    <span>
+                      <strong>{check.name}</strong> — {check.detail}
+                    </span>
+                    {remedy ? (
+                      <Link className="lc-text-link" href={remedy}>
+                        Open settings
+                      </Link>
+                    ) : null}
+                  </li>
+                );
+              })}
           </ul>
         </section>
       ) : null}

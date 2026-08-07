@@ -1,3 +1,5 @@
+import Link from "next/link";
+
 import {
   createNotificationChannelAction,
   createNotificationRuleAction,
@@ -5,6 +7,7 @@ import {
   testNotificationChannelAction,
 } from "@/app/actions";
 import { PendingButton } from "@/components/pending-button";
+import { SettingsSection } from "@/components/settings-section";
 import { formatTimestamp } from "@/lib/format";
 import type {
   AttentionKind,
@@ -33,6 +36,9 @@ type Props = {
   channels: NotificationChannel[];
   rules: NotificationRule[];
   deliveries: Record<string, NotificationDelivery[]>;
+  basePath: string;
+  showDestinationForm: boolean;
+  showRuleForm: boolean;
 };
 
 function healthRole(health: string): "success" | "critical" | "warning" | "muted" {
@@ -42,26 +48,174 @@ function healthRole(health: string): "success" | "critical" | "warning" | "muted
   return "warning";
 }
 
-export function NotificationSettings({ slug, canManage, channels, rules, deliveries }: Props) {
+export function NotificationSettings({
+  slug,
+  canManage,
+  channels,
+  rules,
+  deliveries,
+  basePath,
+  showDestinationForm,
+  showRuleForm,
+}: Props) {
   return (
-    <section className="lc-panel lc-stack lc-stack--4">
-      <div className="lc-stack lc-stack--2">
-        <h2 className="lc-display lc-display--sm">Notifications</h2>
-        <p className="lc-prose lc-prose--muted">
-          Send concise attention summaries without exposing project secrets. Destinations are
-          encrypted at rest and never returned by the API.
-        </p>
-      </div>
+    <SettingsSection
+      id="notifications"
+      title="Notifications"
+      description="Send concise attention summaries without exposing project secrets. Destinations are encrypted and never returned by the API."
+      action={
+        canManage ? (
+          <div className="lc-actions">
+            {!showDestinationForm ? (
+              <Link className="tam-button tam-button--outline" href={`${basePath}?add=destination`}>
+                Add destination
+              </Link>
+            ) : null}
+            {channels.length > 0 && !showRuleForm ? (
+              <Link className="tam-button tam-button--outline" href={`${basePath}?add=rule`}>
+                Add rule
+              </Link>
+            ) : null}
+          </div>
+        ) : null
+      }
+    >
+      {showDestinationForm ? (
+        <form
+          className="lc-settings-form lc-stack lc-stack--4"
+          action={createNotificationChannelAction.bind(null, slug)}
+        >
+          <div className="lc-settings-form__head">
+            <p className="lc-meta">Add an encrypted external destination.</p>
+            <Link className="lc-text-link" href={basePath}>
+              Cancel
+            </Link>
+          </div>
+          <label className="lc-field">
+            <span className="tam-eyebrow">Type</span>
+            <select className="lc-select" name="type" defaultValue="SLACK">
+              <option value="SLACK">Slack incoming webhook</option>
+              <option value="GENERIC_WEBHOOK">Generic signed webhook</option>
+            </select>
+          </label>
+          <label className="lc-field">
+            <span className="tam-eyebrow">Name</span>
+            <input
+              className="lc-writing-input"
+              name="display_name"
+              placeholder="Research alerts…"
+              autoComplete="off"
+              required
+              maxLength={160}
+            />
+          </label>
+          <label className="lc-field">
+            <span className="tam-eyebrow">HTTPS destination</span>
+            <input
+              className="lc-writing-input"
+              type="url"
+              name="destination"
+              placeholder="https://hooks.example.com/limina…"
+              autoComplete="off"
+              spellCheck={false}
+              required
+            />
+          </label>
+          <label className="lc-field">
+            <span className="tam-eyebrow">Signing secret (generic webhook only)</span>
+            <input
+              className="lc-writing-input"
+              type="password"
+              name="signing_secret"
+              autoComplete="new-password"
+            />
+          </label>
+          <label className="lc-confirm">
+            <input type="checkbox" name="trust_delegation_confirmed" required />
+            I authorize Limina to share concise attention summaries with this destination.
+          </label>
+          <PendingButton kind="secondary">Save destination</PendingButton>
+        </form>
+      ) : null}
+
+      {showRuleForm && channels.length > 0 ? (
+        <form
+          className="lc-settings-form lc-stack lc-stack--4"
+          action={createNotificationRuleAction.bind(null, slug)}
+        >
+          <div className="lc-settings-form__head">
+            <p className="lc-meta">Choose which attention events reach a destination.</p>
+            <Link className="lc-text-link" href={basePath}>
+              Cancel
+            </Link>
+          </div>
+          <label className="lc-field">
+            <span className="tam-eyebrow">Destination</span>
+            <select className="lc-select" name="channel_id">
+              {channels.map((channel) => (
+                <option key={channel.id} value={channel.id}>
+                  {channel.display_name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="lc-field">
+            <span className="tam-eyebrow">Rule name</span>
+            <input
+              className="lc-writing-input"
+              name="display_name"
+              placeholder="High-priority attention…"
+              autoComplete="off"
+              required
+              maxLength={160}
+            />
+          </label>
+          <fieldset className="lc-field">
+            <legend className="tam-eyebrow">Attention types (none means all)</legend>
+            {attentionTypes.map((item) => (
+              <label className="lc-confirm" key={item.value}>
+                <input type="checkbox" name="attention_types" value={item.value} />
+                {item.label}
+              </label>
+            ))}
+          </fieldset>
+          <fieldset className="lc-field">
+            <legend className="tam-eyebrow">Severities (none means all)</legend>
+            <div className="lc-actions">
+              {severities.map((severity) => (
+                <label className="lc-confirm" key={severity}>
+                  <input type="checkbox" name="severities" value={severity} />
+                  {severity}
+                </label>
+              ))}
+            </div>
+          </fieldset>
+          <label className="lc-field">
+            <span className="tam-eyebrow">Cooldown in seconds</span>
+            <input
+              className="lc-writing-input"
+              type="number"
+              name="cooldown_seconds"
+              inputMode="numeric"
+              min={0}
+              max={86_400}
+              defaultValue={300}
+              required
+            />
+          </label>
+          <PendingButton kind="secondary">Save rule</PendingButton>
+        </form>
+      ) : null}
 
       {channels.length === 0 ? (
-        <p className="lc-meta">No external notification destination is configured.</p>
+        <p className="lc-settings-empty">No external notification destination is configured.</p>
       ) : (
-        <div className="lc-stack lc-stack--4">
+        <div className="lc-settings-list">
           {channels.map((channel) => {
             const channelRules = rules.filter((rule) => rule.channel_id === channel.id);
             const latestDelivery = deliveries[channel.id]?.[0];
             return (
-              <div className="lc-field" key={channel.id}>
+              <div className="lc-settings-channel" key={channel.id}>
                 <div className="lc-settings-row">
                   <span>{channel.display_name}</span>
                   <span className="lc-chip" data-role={healthRole(channel.health)}>
@@ -114,110 +268,6 @@ export function NotificationSettings({ slug, canManage, channels, rules, deliver
         </div>
       )}
 
-      {canManage ? (
-        <details>
-          <summary className="lc-meta lc-meta--strong">Add a destination</summary>
-          <form
-            className="lc-stack lc-stack--3"
-            action={createNotificationChannelAction.bind(null, slug)}
-          >
-            <label className="lc-field">
-              <span className="tam-eyebrow">Type</span>
-              <select className="lc-select" name="type" defaultValue="SLACK">
-                <option value="SLACK">Slack incoming webhook</option>
-                <option value="GENERIC_WEBHOOK">Generic signed webhook</option>
-              </select>
-            </label>
-            <label className="lc-field">
-              <span className="tam-eyebrow">Name</span>
-              <input className="lc-writing-input" name="display_name" required maxLength={160} />
-            </label>
-            <label className="lc-field">
-              <span className="tam-eyebrow">HTTPS destination</span>
-              <input
-                className="lc-writing-input"
-                type="url"
-                name="destination"
-                placeholder="https://…"
-                autoComplete="off"
-                required
-              />
-            </label>
-            <label className="lc-field">
-              <span className="tam-eyebrow">Signing secret (generic webhook only)</span>
-              <input
-                className="lc-writing-input"
-                type="password"
-                name="signing_secret"
-                autoComplete="new-password"
-              />
-            </label>
-            <label className="lc-confirm">
-              <input type="checkbox" name="trust_delegation_confirmed" required />
-              I authorize Limina to share concise attention summaries with this destination.
-            </label>
-            <PendingButton kind="secondary">Save destination</PendingButton>
-          </form>
-        </details>
-      ) : null}
-
-      {canManage && channels.length > 0 ? (
-        <details>
-          <summary className="lc-meta lc-meta--strong">Add a delivery rule</summary>
-          <form
-            className="lc-stack lc-stack--3"
-            action={createNotificationRuleAction.bind(null, slug)}
-          >
-            <label className="lc-field">
-              <span className="tam-eyebrow">Destination</span>
-              <select className="lc-select" name="channel_id">
-                {channels.map((channel) => (
-                  <option key={channel.id} value={channel.id}>
-                    {channel.display_name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="lc-field">
-              <span className="tam-eyebrow">Rule name</span>
-              <input className="lc-writing-input" name="display_name" required maxLength={160} />
-            </label>
-            <fieldset className="lc-field">
-              <legend className="tam-eyebrow">Attention types (none means all)</legend>
-              {attentionTypes.map((item) => (
-                <label className="lc-confirm" key={item.value}>
-                  <input type="checkbox" name="attention_types" value={item.value} />
-                  {item.label}
-                </label>
-              ))}
-            </fieldset>
-            <fieldset className="lc-field">
-              <legend className="tam-eyebrow">Severities (none means all)</legend>
-              <div className="lc-actions">
-                {severities.map((severity) => (
-                  <label className="lc-confirm" key={severity}>
-                    <input type="checkbox" name="severities" value={severity} />
-                    {severity}
-                  </label>
-                ))}
-              </div>
-            </fieldset>
-            <label className="lc-field">
-              <span className="tam-eyebrow">Cooldown in seconds</span>
-              <input
-                className="lc-writing-input"
-                type="number"
-                name="cooldown_seconds"
-                min={0}
-                max={86_400}
-                defaultValue={300}
-                required
-              />
-            </label>
-            <PendingButton kind="secondary">Save rule</PendingButton>
-          </form>
-        </details>
-      ) : null}
-    </section>
+    </SettingsSection>
   );
 }

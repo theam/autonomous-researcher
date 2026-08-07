@@ -66,7 +66,7 @@ export async function updateProjectDraftAction(
   projectSlug: string,
   expectedVersion: number,
   formData: FormData,
-): Promise<void> {
+): Promise<never> {
   const safeSlug = slug.parse(projectSlug);
   const input = z
     .object({
@@ -84,7 +84,8 @@ export async function updateProjectDraftAction(
     "PATCH",
   );
   revalidatePath(`/projects/${safeSlug}`);
-  revalidatePath(`/projects/${safeSlug}/settings`);
+  revalidatePath(`/projects/${safeSlug}/settings`, "layout");
+  redirect(`/projects/${safeSlug}/settings`);
 }
 
 export async function cloneProjectAction(
@@ -288,7 +289,7 @@ export async function setResourceAction(
   projectSlug: string,
   resourceType: "VARIABLE" | "SECRET",
   formData: FormData,
-): Promise<void> {
+): Promise<never> {
   const safeSlug = slug.parse(projectSlug);
   const input = z
     .object({ name: z.string().trim().regex(/^[A-Z][A-Z0-9_]*$/), value: text.max(32_768) })
@@ -300,10 +301,11 @@ export async function setResourceAction(
     randomUUID(),
     "PUT",
   );
-  revalidatePath(`/projects/${safeSlug}/settings`);
+  revalidatePath(`/projects/${safeSlug}/settings`, "layout");
+  redirect(`/projects/${safeSlug}/settings/environment`);
 }
 
-export async function setSourceAction(projectSlug: string, formData: FormData): Promise<void> {
+export async function setSourceAction(projectSlug: string, formData: FormData): Promise<never> {
   const safeSlug = slug.parse(projectSlug);
   const input = z
     .object({
@@ -318,10 +320,11 @@ export async function setSourceAction(projectSlug: string, formData: FormData): 
     randomUUID(),
     "PUT",
   );
-  revalidatePath(`/projects/${safeSlug}/settings`);
+  revalidatePath(`/projects/${safeSlug}/settings`, "layout");
+  redirect(`/projects/${safeSlug}/settings/sources`);
 }
 
-export async function setMemberAction(projectSlug: string, formData: FormData): Promise<void> {
+export async function setMemberAction(projectSlug: string, formData: FormData): Promise<never> {
   const safeSlug = slug.parse(projectSlug);
   const input = z
     .object({
@@ -337,13 +340,14 @@ export async function setMemberAction(projectSlug: string, formData: FormData): 
     randomUUID(),
     "PUT",
   );
-  revalidatePath(`/projects/${safeSlug}/settings`);
+  revalidatePath(`/projects/${safeSlug}/settings`, "layout");
+  redirect(`/projects/${safeSlug}/settings/team`);
 }
 
 export async function createNotificationChannelAction(
   projectSlug: string,
   formData: FormData,
-): Promise<void> {
+): Promise<never> {
   const safeSlug = slug.parse(projectSlug);
   const input = z
     .object({
@@ -379,13 +383,14 @@ export async function createNotificationChannelAction(
     },
     randomUUID(),
   );
-  revalidatePath(`/projects/${safeSlug}/settings`);
+  revalidatePath(`/projects/${safeSlug}/settings`, "layout");
+  redirect(`/projects/${safeSlug}/settings/notifications`);
 }
 
 export async function createNotificationRuleAction(
   projectSlug: string,
   formData: FormData,
-): Promise<void> {
+): Promise<never> {
   const safeSlug = slug.parse(projectSlug);
   const input = z
     .object({
@@ -416,7 +421,8 @@ export async function createNotificationRuleAction(
     input,
     randomUUID(),
   );
-  revalidatePath(`/projects/${safeSlug}/settings`);
+  revalidatePath(`/projects/${safeSlug}/settings`, "layout");
+  redirect(`/projects/${safeSlug}/settings/notifications`);
 }
 
 export async function setNotificationChannelStateAction(
@@ -430,7 +436,7 @@ export async function setNotificationChannelStateAction(
     { enabled },
     randomUUID(),
   );
-  revalidatePath(`/projects/${safeSlug}/settings`);
+  revalidatePath(`/projects/${safeSlug}/settings/notifications`);
 }
 
 export async function testNotificationChannelAction(
@@ -443,5 +449,5 @@ export async function testNotificationChannelAction(
     {},
     randomUUID(),
   );
-  revalidatePath(`/projects/${safeSlug}/settings`);
+  revalidatePath(`/projects/${safeSlug}/settings/notifications`);
 }

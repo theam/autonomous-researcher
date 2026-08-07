@@ -6,7 +6,7 @@ import { getMe, listTemplates } from "@/lib/limina/server";
 export default async function NewProjectPage() {
   const [me, templates] = await Promise.all([getMe(), listTemplates()]);
   return (
-    <ConsoleFrame activeNav="projects">
+    <ConsoleFrame activeNav="new">
       <div className="lc-pagehead">
         <div className="lc-stack lc-stack--2">
           <p className="tam-eyebrow">Kickoff · four stages</p>

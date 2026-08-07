@@ -35,6 +35,7 @@ resolution:
     - "Current product_logo_plus_tam_text footer signature with linked live TAM text and the Limina mark."
     - "Contrast tuned for AA in light and dark modes."
     - "Plain-language system messages and explicit destructive-action confirmation."
+    - "Persistent workspace/project navigation and route-level read-state-first settings replace the prior card-heavy composition while retaining TAM-50 geometry and tokens."
   open_fixes: []
   optional_polish:
     - "Move the project preflight heading below the overview h1, or demote it to a non-heading callout."

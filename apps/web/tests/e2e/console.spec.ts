@@ -11,6 +11,11 @@ async function expectNoSeriousAccessibilityViolations(page: Page) {
   ).toEqual([]);
 }
 
+async function openShellNavigation(page: Page) {
+  const toggle = page.locator(".lc-mobile-navigation > summary");
+  if (await toggle.isVisible()) await toggle.click();
+}
+
 test.describe("Limina Console", () => {
   test("loads without a framework overlay or browser error", async ({ page }) => {
     const browserErrors: string[] = [];
@@ -28,7 +33,13 @@ test.describe("Limina Console", () => {
     expect(browserErrors).toEqual([]);
   });
 
-  for (const path of ["/", "/projects", "/new", "/settings/health"] as const) {
+  for (const path of [
+    "/",
+    "/projects",
+    "/new",
+    "/settings/health",
+    "/projects/retrieval-reliability/settings",
+  ] as const) {
     test(`${path} renders meaningful, accessible content`, async ({ page }) => {
       await page.goto(path);
       await expect(page.locator("main")).toBeVisible();
@@ -44,6 +55,18 @@ test.describe("Limina Console", () => {
     await expect(skipLink).toBeFocused();
     await skipLink.press("Enter");
     await expect(page.locator("main")).toBeFocused();
+  });
+
+  test("project navigation exposes workspace and project hierarchy", async ({ page }) => {
+    await page.goto("/projects/retrieval-reliability/settings");
+    await openShellNavigation(page);
+    await expect(page.getByRole("navigation", { name: "Primary" })).toBeVisible();
+    await expect(page.getByRole("navigation", { name: "Project" })).toBeVisible();
+    await expect(page.getByRole("navigation", { name: "Settings" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "General" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
   });
 
   test("creates a safe draft, configures write-only input, and attaches live", async ({
@@ -68,7 +91,10 @@ test.describe("Limina Console", () => {
     await expect(page).toHaveURL(new RegExp(`/projects/${slug}$`));
     await expect(page.getByRole("heading", { name: "Console acceptance" })).toBeVisible();
 
+    await openShellNavigation(page);
     await page.getByRole("link", { name: "Settings" }).click();
+    await page.getByRole("link", { name: "Environment" }).click();
+    await page.getByRole("link", { name: "Set Secret" }).click();
     await page.getByLabel("Secret name").fill("E2E_SECRET");
     await page.getByLabel("Secret value").fill(secretValue);
     await page.getByRole("button", { name: "Set write-only secret" }).click();
@@ -76,6 +102,7 @@ test.describe("Limina Console", () => {
     await expect(page.getByText("Configured · value hidden")).toBeVisible();
     await expect(page.locator("body")).not.toContainText(secretValue);
 
+    await openShellNavigation(page);
     await page.getByRole("link", { name: "Live" }).click();
     await expect(page.getByRole("heading", { name: "Live project activity" })).toBeVisible();
     await expect(page.getByRole("status")).toHaveText("live", { timeout: 10_000 });

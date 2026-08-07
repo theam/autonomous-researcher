@@ -1,6 +1,5 @@
 import { ConsoleFrame } from "@/components/console-frame";
 import { KnowledgeBrowser } from "@/components/knowledge-browser";
-import { ProjectNav } from "@/components/project-nav";
 import { getProject, listKnowledge, listSavedKnowledgeViews } from "@/lib/limina/server";
 
 type PageProps = {
@@ -16,8 +15,11 @@ export default async function KnowledgePage({ params, searchParams }: PageProps)
     listSavedKnowledgeViews(slug),
   ]);
   return (
-    <ConsoleFrame activeNav="project" currentProject={{ slug, name: project.name }}>
-      <ProjectNav slug={slug} active="knowledge" />
+    <ConsoleFrame
+      activeNav="project"
+      activeProjectSection="knowledge"
+      currentProject={{ slug, name: project.name }}
+    >
       <div className="lc-pagehead">
         <div className="lc-stack lc-stack--2">
           <p className="tam-eyebrow">Evidence desk · {project.name}</p>
