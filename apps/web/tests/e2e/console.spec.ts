@@ -69,6 +69,57 @@ test.describe("Limina Console", () => {
     );
   });
 
+  test("project selector filters projects and preserves the current section", async ({
+    page,
+  }, testInfo) => {
+    const suffix = `${testInfo.project.name}-${Date.now()}`
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-");
+    const slug = `selector-e2e-${suffix}`;
+    const projectName = `Selector target ${testInfo.project.name}`;
+
+    await page.goto("/new");
+    await page.getByLabel("Project name").fill(projectName);
+    await page.getByLabel("Stable slug").fill(slug);
+    await page
+      .getByRole("textbox", { name: "Mission", exact: true })
+      .fill("Verify project switching across the shared Console shell.");
+    await page
+      .getByLabel("Success criteria")
+      .fill("The selector filters projects and preserves the current section.");
+    await page.getByRole("button", { name: "Create draft" }).click();
+    await expect(page).toHaveURL(new RegExp(`/projects/${slug}$`));
+
+    await page.goto("/projects/retrieval-reliability/settings/environment");
+    const trigger = page.getByRole("button", { name: /Switch project, current project:/ });
+    await trigger.click();
+    const selector = page.getByRole("dialog", { name: "Select project" });
+    await expect(selector).toBeVisible();
+    await expectNoSeriousAccessibilityViolations(page);
+
+    await page.keyboard.press("Escape");
+    await expect(selector).not.toBeVisible();
+    await expect(trigger).toBeFocused();
+
+    await trigger.press("Enter");
+    const search = selector.getByRole("searchbox", { name: "Search projects" });
+    await expect(search).toBeFocused();
+    await page.keyboard.press("Escape");
+
+    await trigger.click();
+    await page.getByRole("heading", { name: "Settings" }).click();
+    await expect(selector).not.toBeVisible();
+
+    await trigger.click();
+    await search.fill("project-that-does-not-exist");
+    await expect(selector.getByText("No projects match this search.")).toBeVisible();
+    await search.fill(slug);
+    const target = selector.getByRole("link", { name: new RegExp(projectName) });
+    await expect(target).toBeVisible();
+    await target.click();
+    await expect(page).toHaveURL(new RegExp(`/projects/${slug}/settings$`));
+  });
+
   test("creates a safe draft, configures write-only input, and attaches live", async ({
     page,
   }, testInfo) => {

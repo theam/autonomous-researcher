@@ -59,12 +59,14 @@ automatically stop an executor.
 - **Settings:** a route-based General / Sources / Environment / Team / Notifications index. Each
   route starts with the current state and reveals one bounded mutation form only when requested.
 
-Navigation uses one persistent desktop rail. Workspace destinations come first; while a project is
-in scope, its Overview, Knowledge, Runs, Live, and Settings destinations appear as a nested group.
-Settings then adds a small local index inside the content area. This keeps the three levels visible
-without turning every page into tabs or every setting into a card. On narrow screens the same
-workspace/project hierarchy collapses behind a native Navigation disclosure and the Settings index
-becomes horizontally scrollable.
+Navigation uses one persistent desktop rail. A searchable project selector shows the active project
+or the global All Projects context and preserves Overview, Knowledge, Runs, Live, or Settings when
+switching. Workspace destinations come next; while a project is in scope, its project destinations
+appear as a nested group. Settings then adds a small local index inside the content area. This keeps
+the three levels visible without turning every page into tabs or every setting into a card. On
+narrow screens the selector becomes a full-width inline panel, the workspace/project hierarchy
+collapses behind a native Navigation disclosure, and the Settings index becomes horizontally
+scrollable.
 
 The visual implementation follows `theam/brand-system` TAM-50 (`@theam/brand-system@0.2.6`): IBM
 Plex Sans and Mono, square writing inputs, restrained `r4` panels, no shadows, no pill buttons

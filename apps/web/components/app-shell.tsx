@@ -22,6 +22,10 @@ import type { CarbonIconType } from "@carbon/icons-react";
 import Link from "next/link";
 
 import { LiminaMark } from "@/components/limina-mark";
+import {
+  ProjectSelector,
+  type ProjectSelectorOption,
+} from "@/components/project-selector";
 
 export type ShellNavKey = "today" | "projects" | "new" | "project" | "account";
 export type ProjectSection = "overview" | "knowledge" | "runs" | "live" | "settings";
@@ -43,6 +47,9 @@ export type AppShellProps = {
   activeNav: ShellNavKey;
   activeProjectSection?: ProjectSection | null;
   currentProject?: ShellCurrentProject | null;
+  projects: ProjectSelectorOption[];
+  totalProjects: number;
+  canCreateProject: boolean;
   children: ReactNode;
 };
 
@@ -73,11 +80,6 @@ function ProjectNavigation({
   const base = `/projects/${encodeURIComponent(currentProject.slug)}`;
   return (
     <div className="lc-sidebar__project">
-      <p className="lc-sidebar__label">Project</p>
-      <Link className="lc-sidebar__project-name" href={base}>
-        <Folders size={16} aria-hidden focusable="false" />
-        <span>{currentProject.name}</span>
-      </Link>
       <nav className="lc-sidebar__nav lc-sidebar__nav--nested" aria-label="Project">
         {projectNavigation.map((item) => {
           const Icon = item.icon;
@@ -156,6 +158,9 @@ export function AppShell({
   activeNav,
   activeProjectSection = null,
   currentProject = null,
+  projects,
+  totalProjects,
+  canCreateProject,
   children,
 }: AppShellProps) {
   const showProjectNavigation = activeNav === "project" && currentProject;
@@ -174,6 +179,13 @@ export function AppShell({
           </Link>
           <span className="lc-sidebar__product">Console</span>
         </div>
+
+        <ProjectSelector
+          projects={projects}
+          totalProjects={totalProjects}
+          currentProject={currentProject}
+          canCreateProject={canCreateProject}
+        />
 
         <details className="lc-mobile-navigation">
           <summary className="tam-button tam-button--outline">Navigation</summary>

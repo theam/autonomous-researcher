@@ -17,6 +17,7 @@ components_used:
   - shell.product
   - navigation.primary
   - navigation.project
+  - navigation.project-selector
   - navigation.settings-index
   - panel.ruled
   - button.standard.primary
@@ -36,6 +37,7 @@ open_decisions:
   - "Limina uses one restrained violet-blue product accent mapped onto TAM semantic roles."
   - "The desktop attention desk uses a five-column queue and three-column detail rail."
   - "Desktop navigation uses a persistent workspace rail with a nested project group; settings use route-level local navigation and read-state-first rows."
+  - "A bordered, shadowless project selector provides global project switching while preserving project-section context."
 warnings:
   - "The private @theam/brand-system package requires a GitHub Packages read token at build time."
   - "The newer TAM-50 tier signature rule supersedes the older proto generator wording."

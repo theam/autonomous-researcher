@@ -36,9 +36,15 @@ evidence.
   with a persistent project rail, route-level settings categories, read-state-first rows, and
   URL-addressable edit/add forms. The project brief and preflight remain on Overview rather than
   being duplicated as configurable settings.
+- The project selector exposes every authorized project without leaving the current project
+  section. It filters by name or slug, identifies the current project, restores focus on Escape,
+  closes on outside interaction, bounds the 200-project list, and exposes project creation only
+  through the server-returned capability.
 
 Independent judgment records:
 
+- [Claude Code Opus 5 project-selector acceptance](reviews/claude-fable-project-selector-acceptance-2026-08-07.md)
+  — **APPROVE — SHIP**, no open P0/P1.
 - [Claude Code Opus 5 navigation acceptance](reviews/claude-fable-console-navigation-acceptance-2026-08-07.md)
   — **APPROVE** after reciprocal resolution; no open P0/P1.
 - [Claude Code Opus 5 implementation acceptance](reviews/claude-fable-console-acceptance-2026-08-06.md)
@@ -98,14 +104,15 @@ $ vitest run
 
  RUN  v3.2.4 /Users/adrian-theam/.codex/worktrees/3a40/researcher/apps/web
 
- ✓ lib/request-origin.test.ts (2 tests) 3ms
- ✓ lib/attention-presenter.test.ts (2 tests) 15ms
- ✓ lib/env-schema.test.ts (4 tests) 3ms
- ✓ components/action-notice.test.tsx (2 tests) 33ms
- ✓ components/attention-desk.test.tsx (2 tests) 15ms
+ ✓ lib/request-origin.test.ts (2 tests) 4ms
+ ✓ lib/attention-presenter.test.ts (2 tests) 12ms
+ ✓ lib/env-schema.test.ts (4 tests) 4ms
+ ✓ components/action-notice.test.tsx (2 tests) 32ms
+ ✓ components/attention-desk.test.tsx (2 tests) 13ms
+ ✓ components/project-selector.test.tsx (5 tests) 61ms
 
- Test Files  5 passed (5)
-      Tests  12 passed (12)
+ Test Files  6 passed (6)
+      Tests  17 passed (17)
 ```
 
 ### Production build
@@ -132,12 +139,12 @@ Command: `pnpm test:e2e` from `apps/web`, against the deployed Compose instance.
 ```text
 $ playwright test
 
-Running 18 tests using 8 workers
+Running 20 tests using 8 workers
 
-  18 passed (9.6s)
+  20 passed (10.5s)
 ```
 
-The browser run created deterministic `console-e2e-*` fixtures. Those exact rows were deleted
+The browser run created deterministic `console-e2e-*` and `selector-e2e-*` fixtures. Those exact rows were deleted
 after the pass; the local handoff database contains only `retrieval-reliability` and
 `retrieval-reliability-clone`.
 

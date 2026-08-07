@@ -1,5 +1,7 @@
 import "server-only";
 
+import { cache } from "react";
+
 import { getConsoleSession } from "@/lib/auth/server";
 import { env } from "@/lib/env";
 import type {
@@ -68,13 +70,13 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await response.json()) as T;
 }
 
-export function getMe(): Promise<Me> {
+export const getMe = cache(function getMe(): Promise<Me> {
   return request<Me>("/v2/me");
-}
+});
 
-export function listProjects(): Promise<ProjectPage> {
+export const listProjects = cache(function listProjects(): Promise<ProjectPage> {
   return request<ProjectPage>("/v2/projects?limit=200");
-}
+});
 
 export function getProject(slug: string): Promise<Project> {
   return request<Project>(`/v2/projects/${encodeURIComponent(slug)}`);

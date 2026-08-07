@@ -6,7 +6,7 @@ import {
   type ShellCurrentProject,
   type ShellNavKey,
 } from "@/components/app-shell";
-import { getMe } from "@/lib/limina/server";
+import { getMe, listProjects } from "@/lib/limina/server";
 
 type ConsoleFrameProps = {
   activeNav: ShellNavKey;
@@ -28,12 +28,15 @@ export async function ConsoleFrame({
   currentProject = null,
   children,
 }: ConsoleFrameProps) {
-  const me = await getMe();
+  const [me, projects] = await Promise.all([getMe(), listProjects()]);
   return (
     <AppShell
       activeNav={activeNav}
       activeProjectSection={activeProjectSection}
       currentProject={currentProject}
+      projects={projects.items.map(({ slug, name, status }) => ({ slug, name, status }))}
+      totalProjects={projects.total}
+      canCreateProject={me.capabilities.includes("project:create")}
       operator={{
         name: me.display_name,
         email: me.email,
