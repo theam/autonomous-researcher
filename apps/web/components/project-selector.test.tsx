@@ -38,7 +38,6 @@ describe("ProjectSelector states", () => {
         projects={[]}
         totalProjects={0}
         currentProject={null}
-        canCreateProject={false}
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: "Select a project" }));
@@ -51,7 +50,6 @@ describe("ProjectSelector states", () => {
         projects={[{ slug: "retrieval-lab", name: "Retrieval Lab", status: "ACTIVE" }]}
         totalProjects={1}
         currentProject={null}
-        canCreateProject
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: "Select a project" }));
@@ -68,7 +66,6 @@ describe("ProjectSelector states", () => {
         projects={[{ slug: "first", name: "First", status: "ACTIVE" }]}
         totalProjects={240}
         currentProject={null}
-        canCreateProject={false}
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: "Select a project" }));

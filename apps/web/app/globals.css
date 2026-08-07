@@ -729,11 +729,6 @@ select {
   border-top: 1px solid var(--limina-hairline);
 }
 
-.lc-project-selector__footer {
-  padding: var(--tam-space-2);
-  border-top: 1px solid var(--limina-hairline);
-}
-
 .lc-sidebar__nav {
   display: flex;
   flex-direction: column;
@@ -995,6 +990,142 @@ select {
   gap: var(--tam-space-4);
   flex-wrap: wrap;
   margin-bottom: var(--tam-space-5);
+}
+
+/* ───────────────────────────────────────────────────────────────────────────
+ * Project portfolio — compact, unlabeled cards with one clear destination.
+ * ─────────────────────────────────────────────────────────────────────────── */
+
+.lc-project-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr));
+  gap: var(--tam-space-3);
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.lc-project-grid > li {
+  min-width: 0;
+}
+
+.lc-project-card {
+  display: flex;
+  min-height: 168px;
+  height: 100%;
+  flex-direction: column;
+  gap: var(--tam-space-4);
+  padding: var(--tam-space-4);
+  border: 1px solid var(--limina-hairline);
+  border-radius: var(--tam-radius-sm);
+  background: rgb(var(--tam-color-surface-primary) / 1);
+  color: rgb(var(--tam-color-text-primary) / 1);
+  text-decoration: none;
+}
+
+.lc-project-card:hover {
+  border-color: var(--limina-hairline-strong);
+  background: rgb(var(--tam-color-surface-secondary) / 1);
+}
+
+.lc-project-card:focus-visible {
+  outline: 2px solid rgb(var(--tam-color-accent-focus) / 1);
+  outline-offset: 2px;
+}
+
+.lc-project-card__head {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 32px minmax(0, 1fr) 20px;
+  align-items: center;
+  gap: var(--tam-space-3);
+}
+
+.lc-project-card__initial {
+  display: inline-flex;
+  width: 32px;
+  height: 32px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--limina-hairline-strong);
+  border-radius: var(--tam-radius-sm);
+  background: rgb(var(--tam-color-surface-secondary) / 1);
+  font-family: var(--tam-font-body-mono);
+  font-size: var(--tam-text-body-2-size);
+}
+
+.lc-project-card__identity {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.lc-project-card__identity strong,
+.lc-project-card__identity span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lc-project-card__identity strong {
+  font-family: var(--tam-font-body-sans);
+  font-size: var(--tam-text-body-2-size);
+  font-weight: 600;
+}
+
+.lc-project-card__identity span,
+.lc-project-card__meta {
+  font-family: var(--tam-font-body-mono);
+  font-size: var(--tam-text-body-2-size);
+  line-height: var(--tam-text-body-2-leading);
+  color: rgb(var(--tam-color-text-secondary) / 1);
+}
+
+.lc-project-card__status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: rgb(var(--tam-color-text-secondary) / 1);
+}
+
+.lc-project-card__status[data-status="COMPLETE"] {
+  color: rgb(var(--tam-color-success) / 1);
+}
+
+.lc-project-card__status[data-status="FAILED"] {
+  color: rgb(var(--tam-color-critical) / 1);
+}
+
+.lc-project-card__status[data-status="PAUSED"],
+.lc-project-card__status[data-status="WAITING"] {
+  color: rgb(var(--tam-color-warning) / 1);
+}
+
+.lc-project-card__objective {
+  display: -webkit-box;
+  overflow: hidden;
+  font-family: var(--tam-font-body-sans);
+  font-size: var(--tam-text-body-2-size);
+  line-height: var(--tam-text-body-2-leading);
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.lc-project-card__meta {
+  display: flex;
+  align-items: center;
+  gap: var(--tam-space-2);
+  margin-top: auto;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.lc-project-card__meta > span,
+.lc-project-card__meta > time {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* ───────────────────────────────────────────────────────────────────────────

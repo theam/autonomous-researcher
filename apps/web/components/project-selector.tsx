@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 
-import { Add, Checkmark, ChevronDown, Folders, Search } from "@carbon/icons-react";
+import { Checkmark, ChevronDown, Folders, Search } from "@carbon/icons-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
@@ -16,7 +16,6 @@ type Props = {
   projects: ProjectSelectorOption[];
   totalProjects: number;
   currentProject: { slug: string; name: string } | null;
-  canCreateProject: boolean;
 };
 
 export function projectDestination(slug: string, pathname: string): string {
@@ -31,7 +30,6 @@ export function ProjectSelector({
   projects,
   totalProjects,
   currentProject,
-  canCreateProject,
 }: Props) {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
@@ -252,21 +250,6 @@ export function ProjectSelector({
             ) : null}
           </nav>
 
-          {canCreateProject ? (
-            <div className="lc-project-selector__footer">
-              <Link
-                className="lc-project-selector__option"
-                href="/new"
-                onClick={() => close()}
-              >
-                <Add size={16} aria-hidden focusable="false" />
-                <span>
-                  <strong>Create Project</strong>
-                  <small>Start a new durable research brief</small>
-                </span>
-              </Link>
-            </div>
-          ) : null}
         </div>
       ) : null}
     </div>

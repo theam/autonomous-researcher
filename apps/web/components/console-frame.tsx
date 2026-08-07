@@ -36,7 +36,6 @@ export async function ConsoleFrame({
       currentProject={currentProject}
       projects={projects.items.map(({ slug, name, status }) => ({ slug, name, status }))}
       totalProjects={projects.total}
-      canCreateProject={me.capabilities.includes("project:create")}
       operator={{
         name: me.display_name,
         email: me.email,

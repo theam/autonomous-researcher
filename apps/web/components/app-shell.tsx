@@ -10,7 +10,6 @@ import type { ReactNode } from "react";
 
 import {
   Activity,
-  Add,
   Document,
   Folders,
   Home,
@@ -27,7 +26,7 @@ import {
   type ProjectSelectorOption,
 } from "@/components/project-selector";
 
-export type ShellNavKey = "today" | "projects" | "new" | "project" | "account";
+export type ShellNavKey = "today" | "projects" | "project" | "account";
 export type ProjectSection = "overview" | "knowledge" | "runs" | "live" | "settings";
 
 export type ShellOperator = {
@@ -49,7 +48,6 @@ export type AppShellProps = {
   currentProject?: ShellCurrentProject | null;
   projects: ProjectSelectorOption[];
   totalProjects: number;
-  canCreateProject: boolean;
   children: ReactNode;
 };
 
@@ -119,14 +117,6 @@ function WorkspaceNavigation({ activeNav }: { activeNav: ShellNavKey }) {
         <Folders size={16} aria-hidden focusable="false" />
         <span>Projects</span>
       </Link>
-      <Link
-        className="lc-sidebar__link"
-        href="/new"
-        aria-current={activeNav === "new" ? "page" : undefined}
-      >
-        <Add size={16} aria-hidden focusable="false" />
-        <span>New Project</span>
-      </Link>
     </nav>
   );
 }
@@ -160,7 +150,6 @@ export function AppShell({
   currentProject = null,
   projects,
   totalProjects,
-  canCreateProject,
   children,
 }: AppShellProps) {
   const showProjectNavigation = activeNav === "project" && currentProject;
@@ -184,7 +173,6 @@ export function AppShell({
           projects={projects}
           totalProjects={totalProjects}
           currentProject={currentProject}
-          canCreateProject={canCreateProject}
         />
 
         <details className="lc-mobile-navigation">

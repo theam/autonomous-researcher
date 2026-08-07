@@ -69,6 +69,18 @@ test.describe("Limina Console", () => {
     );
   });
 
+  test("projects use focused cards with one creation action", async ({ page }) => {
+    await page.goto("/projects");
+    await openShellNavigation(page);
+
+    await expect(page.getByRole("list", { name: "Projects visible to you" })).toBeVisible();
+    await expect(page.getByRole("link", { name: /^Open / }).first()).toBeVisible();
+    await expect(page.getByRole("link", { name: "New project", exact: true })).toHaveCount(1);
+    await expect(page.getByRole("navigation", { name: "Primary" })).not.toContainText(
+      "New Project",
+    );
+  });
+
   test("project selector filters projects and preserves the current section", async ({
     page,
   }, testInfo) => {

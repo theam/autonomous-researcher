@@ -2,7 +2,7 @@ import { Add } from "@carbon/icons-react";
 import Link from "next/link";
 
 import { ConsoleFrame } from "@/components/console-frame";
-import { ProjectTable } from "@/components/project-table";
+import { ProjectGrid } from "@/components/project-grid";
 import { listProjects } from "@/lib/limina/server";
 
 export default async function ProjectsPage() {
@@ -19,7 +19,7 @@ export default async function ProjectsPage() {
           <Add size={16} aria-hidden /> New project
         </Link>
       </div>
-      <ProjectTable projects={projects.items} />
+      <ProjectGrid projects={projects.items} />
     </ConsoleFrame>
   );
 }
